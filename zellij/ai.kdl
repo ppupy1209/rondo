@@ -1,0 +1,12 @@
+layout {
+    tab name="ai" focus=true {
+        pane split_direction="vertical" {
+            pane name="claude" command="claude" size="50%"
+            pane split_direction="horizontal" {
+                pane name="codex" command="codex"
+                pane name="gemini" command="gemini"
+            }
+        }
+    }
+    tab name="shell"
+}

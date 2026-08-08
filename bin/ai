@@ -1,0 +1,21 @@
+#!/bin/sh
+# 프로젝트별 AI 세션. 레포 루트 이름으로 zellij 세션을 만들고, 이미 있으면 붙는다.
+#   ai          현재 레포의 세션 열기 / 붙기
+#   ai <이름>   이름을 직접 지정
+#   ai -l       열려 있는 세션 목록
+set -eu
+
+case "${1:-}" in
+    -l|--list) exec zellij list-sessions ;;
+esac
+
+root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+name="${1:-$(basename "$root")}"
+
+cd "$root"
+
+if zellij list-sessions -sn 2>/dev/null | grep -qx "$name"; then
+    exec zellij attach "$name"
+else
+    exec zellij -s "$name" -l ai
+fi
