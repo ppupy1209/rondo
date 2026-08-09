@@ -1,6 +1,8 @@
 """Release bootstrap contracts that must not silently become mutable."""
 from __future__ import annotations
 
+import base64
+import shutil
 import subprocess
 import sys
 import unittest
@@ -10,6 +12,35 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallerContractTest(unittest.TestCase):
+    def test_powershell_bootstrap_param_block_supports_invoke_expression(self) -> None:
+        executable = shutil.which("powershell") or shutil.which("pwsh")
+        if not executable:
+            self.skipTest("PowerShell is unavailable")
+
+        source = (ROOT / "install.ps1").read_text(encoding="utf-8")
+        body_marker = '$ErrorActionPreference = "Stop"'
+        self.assertIn(body_marker, source)
+        param_block = source.split(body_marker, 1)[0]
+        command = f"""\
+$source = @'
+{param_block}
+'@
+try {{
+    Invoke-Expression $source
+}} catch {{
+    Write-Error $_
+    exit 1
+}}
+"""
+        encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
+        result = subprocess.run(
+            [executable, "-NoProfile", "-EncodedCommand", encoded],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_readme_install_urls_match_the_cli_version(self) -> None:
         version = subprocess.run(
             [sys.executable, str(ROOT / "bin" / "rondo"), "--version"],
@@ -21,8 +52,8 @@ class InstallerContractTest(unittest.TestCase):
             self.assertIn(f"/rondo/v{version}/install.ps1", source)
 
     def test_bootstraps_use_versioned_verified_assets(self) -> None:
-        shell = (ROOT / "install.sh").read_text()
-        powershell = (ROOT / "install.ps1").read_text()
+        shell = (ROOT / "install.sh").read_text(encoding="utf-8")
+        powershell = (ROOT / "install.ps1").read_text(encoding="utf-8")
         for source in (shell, powershell):
             self.assertIn("SHA256SUMS", source)
             self.assertIn("0.44.3", source)
@@ -36,7 +67,9 @@ class InstallerContractTest(unittest.TestCase):
         self.assertIn('[ -f "$f" ] && [ ! -L "$f" ] || continue', shell)
 
     def test_release_job_publishes_both_platform_archives_and_checksums(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
         for asset in ("rondo.tar.gz", "rondo.zip", "SHA256SUMS"):
             self.assertIn(asset, workflow)
         self.assertIn('"v*.*.*"', workflow)

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^v?\d+\.\d+\.\d+$')]
+    [ValidatePattern('^(?:v?\d+\.\d+\.\d+)?$')]
     [string]$Version = "",
     [switch]$ForceRemote
 )

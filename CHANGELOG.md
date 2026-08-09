@@ -2,6 +2,12 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.12.3] - 2026-08-10
+
+### 수정
+
+- Windows PowerShell 5.1에서 한 줄 설치 스크립트가 빈 `Version` 기본값 검증에 실패하는 문제 수정
+
 ## [0.12.2] - 2026-08-10
 
 ### 수정
@@ -45,6 +51,7 @@
 - 제거 전 전체 대상 사전 검증과 Rondo가 소유한 launcher·hook만 제거
 - 진단 묶음은 허용 목록 기반 메타데이터만 기록하고 기존 파일을 덮어쓰지 않음
 
+[0.12.3]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.3
 [0.12.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.2
 [0.12.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.1
 [0.12.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.0
