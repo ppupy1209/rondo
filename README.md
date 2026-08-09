@@ -28,17 +28,39 @@ git -C ~/ai-tools pull
 ## `ai` — 프로젝트별 AI 세션
 
 ```sh
-ai              # 현재 레포 이름으로 세션 열기 / 붙기
-ai 실험용        # 이름 직접 지정
-ai add kimi     # 현재 세션에 AI 패널 추가
+ai              # 세션 열기 / 붙기 (첫 실행이면 setup 부터)
+ai setup        # 어떤 패널을 띄울지 고르고 로그인까지 마친다
+ai add kimi     # 열려 있는 세션에 패널 추가
+ai help         # 단축키와 사용법
 ai -l           # 열려 있는 세션 목록
 ```
 
+### 첫 실행 — `ai setup`
+
+구성 파일(`~/.config/ai-tools/panels`)이 없으면 `ai` 가 먼저 물어본다.
+
 ```
-┌──────────────────┬──────────────────┐
+패널로 띄울 AI 를 고르세요.
+
+  1) claude   Claude Code              설치됨
+  2) codex    Codex CLI                설치됨
+  3) gemini   Antigravity CLI (agy)    설치됨
+  4) kimi     Kimi Code CLI            미설치 — README 설치 안내 참고
+  5) grok     Grok Build               설치됨
+
+이름을 공백으로 구분해 입력. 그냥 엔터를 누르면 기본값: claude codex gemini
+>
+```
+
+이어서 **각 CLI 를 순서대로 한 번씩 띄워** 로그인·초기 설정을 끝낼지 물어본다. 좁은 패널 안에서 로그인 화면을 넘기는 것보다 편하다. 각 CLI 를 종료하면 다음으로 넘어가고, 다 끝나면 세션이 열린다.
+
+레이아웃은 고른 패널로 매번 생성한다(`~/.cache/ai-tools/layout.kdl`). 첫 패널이 왼쪽 절반, 나머지가 오른쪽에 세로로 쌓인다. 구성을 바꾸려면 `ai setup` 후 세션을 새로 열면 된다.
+
+```
+├──────────────────────────────────────┤  ← 상태 바 (ai-status)
 │                  │      codex       │
 │      claude      ├──────────────────┤
-│                  │   antigravity    │
+│                  │      gemini      │
 └──────────────────┴──────────────────┘
    탭: ai | shell
 ```
@@ -46,7 +68,7 @@ ai -l           # 열려 있는 세션 목록
 ### 패널 추가 · 삭제
 
 ```sh
-ai add <claude|codex|antigravity|gemini|kimi|grok>
+ai add <claude|codex|gemini|kimi|grok>
 ```
 
 zellij 세션 안에서 실행한다(보통 `shell` 탭). 종료 후 `handoff` 까지 자동으로 이어 붙는다. 설치 안 된 CLI 는 실행 전에 걸러낸다.
@@ -62,8 +84,7 @@ zellij 세션 안에서 실행한다(보통 `shell` 탭). 종료 후 `handoff` �
 |---|---|---|---|
 | Claude Code | `claude` | ✓ | `curl -fsSL https://claude.ai/install.sh \| bash` |
 | Codex CLI | `codex` | ✓ | `npm install -g @openai/codex` |
-| Antigravity CLI | `agy` | ✓ | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
-| Gemini CLI | `gemini` | | `npm install -g @google/gemini-cli` (Antigravity 의 전신) |
+| Antigravity CLI (`gemini` 패널) | `agy` | ✓ | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
 | Kimi Code CLI | `kimi` | | `curl -fsSL https://code.kimi.com/kimi-code/install.sh \| bash` |
 | Grok Build | `grok` | | `curl -fsSL https://x.ai/cli/install.sh \| bash` |
 
@@ -165,8 +186,8 @@ claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h26m) wk ▓▓▓▓▓░░�
 |---|---|---|
 | Claude | `claude-statusline` 이 남기는 `~/.cache/ai-tools/claude.<레포>.json` (모델·컨텍스트)<br>`claude-limits.json` (한도, 계정 단위 공유) | 모델 · 컨텍스트% · 5시간/주간 한도 |
 | Codex | `~/.codex/state_5.sqlite` 의 `threads` | 모델 · reasoning effort · 스레드 누적 토큰 |
-| Antigravity | `~/.gemini/antigravity-cli/conversations/*.db` | 모델 |
-| Gemini · Kimi · Grok | 없음 | `-` |
+| Gemini (Antigravity) | `~/.gemini/antigravity-cli/conversations/*.db` | 모델만 |
+| Kimi · Grok | 없음 | `-` |
 
 > **값이 `-` 로만 나온다면** 대개 둘 중 하나다.
 >
@@ -179,8 +200,8 @@ claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h26m) wk ▓▓▓▓▓░░�
 - **Claude 값은 Claude Code 를 한 번 띄워야 채워진다.** statusLine 이 그릴 때 캐시가 쓰인다. 1시간 지난 값은 버린다.
 - Codex 의 `43.4M tok` 은 현재 컨텍스트가 아니라 **스레드 누적 토큰**이다. Claude 의 `ctx 29%` 와 다른 의미다.
 - Codex 는 `thread_source='user'` 로 걸러 `codex-auto-review` 같은 서브에이전트 스레드를 제외한다.
-- SQLite 는 `immutable=1` 로 연다. 쓰기 중이면 열기가 실패해 값이 깜빡였다. 그래도 실패한 틱에서는 **마지막 성공값을 유지**한다.
-- Antigravity 는 대화 DB 가 protobuf 라 모델명만 문자열로 긁는다. 토큰·한도는 못 읽는다.
+- SQLite 는 `mode=ro` 로 먼저 연다. `immutable=1` 을 먼저 쓰면 **WAL 을 통째로 무시해** 최근 세션이 안 보인다(codex DB 는 WAL 이고 `-wal` 이 수 MB). 잠겨서 실패할 때만 `immutable` 로 물러서고, 그래도 실패하면 마지막 성공값을 유지한다.
+- Gemini(Antigravity) 는 대화 DB 가 protobuf 라 모델명만 문자열로 긁는다. **사용 한도는 디스크에 남지 않는다** — `quota_manager` 가 실행 중에 새로 받아 메모리에만 둔다(로그에 `doRefreshQuota` 만 남고 값은 없음). 그래서 배터리 바가 없다.
 - 상태 바 패널은 **입력 에코를 꺼 둔다**. zellij 에 '포커스 불가' 옵션이 없어 클릭 자체는 막지 못하지만, 클릭 후 타이핑해도 바가 밀리지 않는다.
 - Antigravity · Kimi · Grok 은 모델·토큰·한도를 로컬 파일에 남기지 않는다. Grok 은 사용량을 OpenTelemetry 로만 내보내고(자체 컬렉터 필요), 세션 중 `/cost` · `/context` 로만 볼 수 있다. 남기기 시작하면 `ai-status` 에 함수 하나 추가하면 된다.
 

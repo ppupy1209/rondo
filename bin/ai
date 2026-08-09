@@ -1,43 +1,176 @@
 #!/bin/sh
 # 프로젝트별 AI 세션. 레포 루트 이름으로 zellij 세션을 만들고, 이미 있으면 붙는다.
-#   ai                  현재 레포의 세션 열기 / 붙기
-#   ai <이름>            이름을 직접 지정
-#   ai add <에이전트>     현재 세션에 AI 패널 추가
+#
+#   ai                  세션 열기 / 붙기 (구성이 없으면 setup 부터)
+#   ai setup            어떤 패널을 띄울지 고르고 로그인까지 마친다
+#   ai add <에이전트>     열려 있는 세션에 패널 추가
+#   ai help             단축키와 사용법
 #   ai -l               열려 있는 세션 목록
-# 패널 닫기는 zellij 기본 키: Ctrl+p 다음 x
 set -eu
 
-# 에이전트 이름 -> "실행명령 기록이름". 여기만 고치면 add 대상이 늘어난다.
-agent_cmd() {
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-tools"
+CONFIG="$CONFIG_DIR/panels"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-tools"
+DEFAULT_PANELS="claude codex gemini"
+ALL_PANELS="claude codex gemini kimi grok"
+
+# 에이전트 -> "패널에서 띄울 명령  handoff 이름  설명"
+agent_spec() {
     case "$1" in
-        claude)             echo "claude Claude" ;;
-        codex)              echo "codex Codex" ;;
-        antigravity|agy)    echo "agy Antigravity" ;;
-        gemini)             echo "gemini Gemini" ;;
-        kimi)               echo "kimi Kimi" ;;
-        grok)               echo "grok Grok" ;;
-        *)                  return 1 ;;
+        claude) echo "claude Claude 'Claude Code'" ;;
+        codex)  echo "codex-session Codex 'Codex CLI'" ;;
+        gemini) echo "agy-session Gemini 'Antigravity CLI (agy)'" ;;
+        kimi)   echo "kimi-session Kimi 'Kimi Code CLI'" ;;
+        grok)   echo "grok-session Grok 'Grok Build'" ;;
+        *)      return 1 ;;
     esac
 }
 
+# 실제로 실행되는 바이너리 (설치 확인용)
+agent_bin() {
+    case "$1" in
+        gemini) echo agy ;;
+        *)      echo "$1" ;;
+    esac
+}
+
+field() { echo "$1" | awk -v n="$2" '{print $n}'; }
+
+usage_lines() {
+    cat <<'EOF'
+사용법
+  ai                  세션 열기 / 붙기
+  ai setup            패널 구성 다시 고르기
+  ai add <에이전트>     지금 세션에 패널 추가 (claude codex gemini kimi grok)
+  ai -l               열려 있는 세션 목록
+  ai help             이 도움말
+
+세션 안에서
+  Ctrl+p 다음 x        현재 패널 닫기
+  Ctrl+p 다음 n        빈 패널 열기
+  Ctrl+p 방향키        패널 이동
+  Ctrl+t 방향키        탭 이동 (ai | shell)
+  Ctrl+o 다음 d        디태치 (세션은 살아 있음)
+
+패널을 다시 넣으려면 shell 탭에서 `ai add <에이전트>`.
+세션 정리는 `zellij delete-session <이름> --force`.
+EOF
+}
+
+setup() {
+    echo "패널로 띄울 AI 를 고르세요."
+    echo
+    i=0
+    for a in $ALL_PANELS; do
+        i=$((i + 1))
+        spec=$(agent_spec "$a")
+        desc=$(echo "$spec" | sed "s/^[^ ]* [^ ]* //; s/'//g")
+        if command -v "$(agent_bin "$a")" >/dev/null 2>&1; then
+            state="설치됨"
+        else
+            state="미설치 — README 설치 안내 참고"
+        fi
+        printf "  %d) %-8s %-24s %s\n" "$i" "$a" "$desc" "$state"
+    done
+    echo
+    echo "이름을 공백으로 구분해 입력. 그냥 엔터를 누르면 기본값: $DEFAULT_PANELS"
+    printf "> "
+    read -r answer || answer=""
+    [ -n "$answer" ] || answer="$DEFAULT_PANELS"
+
+    chosen=""
+    for a in $answer; do
+        if ! agent_spec "$a" >/dev/null 2>&1; then
+            echo "모르는 에이전트: $a — 건너뜀" >&2
+            continue
+        fi
+        if ! command -v "$(agent_bin "$a")" >/dev/null 2>&1; then
+            echo "$a 미설치 — 건너뜀" >&2
+            continue
+        fi
+        chosen="$chosen $a"
+    done
+    chosen=$(echo "$chosen" | sed 's/^ *//')
+    [ -n "$chosen" ] || { echo "고른 패널이 없습니다." >&2; exit 1; }
+
+    mkdir -p "$CONFIG_DIR"
+    echo "$chosen" > "$CONFIG"
+    echo
+    echo "저장했습니다: $chosen"
+
+    # 로그인·초기 설정은 패널 안에서 하면 화면이 좁아 불편하다. 여기서 하나씩 끝낸다.
+    echo
+    echo "각 CLI 를 순서대로 한 번씩 실행해 로그인·초기 설정을 끝낼까요?"
+    echo "(각 CLI 를 종료하면 다음으로 넘어갑니다. 건너뛰려면 그냥 엔터)"
+    printf "[y/N] > "
+    read -r login || login=""
+    case "$login" in
+        y | Y)
+            for a in $chosen; do
+                echo
+                echo "--- $a — 로그인·초기 설정을 마치고 종료하세요 ---"
+                "$(agent_bin "$a")" || true
+            done
+            ;;
+    esac
+}
+
+# 고른 패널로 레이아웃을 만든다. 첫 패널이 왼쪽 절반, 나머지는 오른쪽에 세로로 쌓인다.
+write_layout() {
+    panels="$1"
+    out="$2"
+    first=$(echo "$panels" | awk '{print $1}')
+    rest=$(echo "$panels" | cut -s -d' ' -f2-)
+
+    mkdir -p "$(dirname "$out")"
+    {
+        echo 'layout {'
+        echo '    tab name="ai" focus=true {'
+        echo '        pane name="status" command="ai-status" size=1 borderless=true'
+        echo '        pane split_direction="vertical" {'
+        printf '            pane name="%s" command="%s" size="50%%"\n' \
+            "$first" "$(field "$(agent_spec "$first")" 1)"
+        if [ -n "$rest" ]; then
+            echo '            pane split_direction="horizontal" {'
+            for a in $rest; do
+                printf '                pane name="%s" command="%s"\n' \
+                    "$a" "$(field "$(agent_spec "$a")" 1)"
+            done
+            echo '            }'
+        fi
+        echo '        }'
+        echo '    }'
+        echo '    tab name="shell"'
+        echo '}'
+    } > "$out"
+}
+
 case "${1:-}" in
-    -l|--list)
+    -l | --list)
         exec zellij list-sessions
+        ;;
+    help | -h | --help)
+        usage_lines
+        exit 0
+        ;;
+    setup)
+        setup
+        exit 0
         ;;
     add)
         name="${2:-}"
-        [ -n "$name" ] || { echo "사용법: ai add <claude|codex|antigravity|gemini|kimi|grok>" >&2; exit 1; }
-        spec=$(agent_cmd "$name") || { echo "모르는 에이전트: $name" >&2; exit 1; }
-        cmd=${spec% *}
-        label=${spec#* }
-        command -v "$cmd" >/dev/null 2>&1 || { echo "$cmd 미설치 — README 설치 안내 참고" >&2; exit 1; }
-        [ -n "${ZELLIJ:-}" ] || { echo "zellij 세션 안에서 실행할 것 ('ai' 로 세션 먼저 열기)" >&2; exit 1; }
+        [ -n "$name" ] || { echo "사용법: ai add <$(echo "$ALL_PANELS" | tr ' ' '|')>" >&2; exit 1; }
+        spec=$(agent_spec "$name") || { echo "모르는 에이전트: $name" >&2; exit 1; }
+        cmd=$(field "$spec" 1)
+        label=$(field "$spec" 2)
+        command -v "$(agent_bin "$name")" >/dev/null 2>&1 ||
+            { echo "$(agent_bin "$name") 미설치 — README 설치 안내 참고" >&2; exit 1; }
+        [ -n "${ZELLIJ:-}" ] ||
+            { echo "zellij 세션 안에서 실행할 것 ('ai' 로 세션 먼저 열기)" >&2; exit 1; }
         # ai 탭으로 옮기고, 1행짜리 상태 바가 쪼개지지 않도록 포커스를 아래로 내린다.
-        # new-pane 은 포커스된 패널을 분할하므로 이 두 줄이 없으면 상태 바가 조각난다.
         zellij action go-to-tab-name ai >/dev/null 2>&1 || true
         zellij action move-focus down >/dev/null 2>&1 || true
-        # 종료 후 handoff 까지 실행. 세션 종료 훅이 있는 CLI 도 한 번 더 도는 것은 무해하다(멱등).
-        exec zellij action new-pane --name "$name" -- sh -c "$cmd; handoff $label"
+        exec zellij action new-pane --name "$name" -- "$cmd"
         ;;
 esac
 
@@ -48,7 +181,13 @@ cd "$root"
 
 if zellij list-sessions -sn 2>/dev/null | grep -qx "$name"; then
     exec zellij attach "$name"
-else
-    # -l 은 "기존 세션에 탭 추가" 동작이라 세션이 없으면 실패한다. 새로 만들 때는 -n.
-    exec zellij -s "$name" -n ai
 fi
+
+# 첫 실행이면 무엇을 띄울지부터 고른다
+[ -f "$CONFIG" ] || setup
+panels=$(cat "$CONFIG")
+
+layout="$CACHE_DIR/layout.kdl"
+write_layout "$panels" "$layout"
+echo "패널: $panels"
+exec zellij -s "$name" -n "$layout"

@@ -15,8 +15,8 @@ for f in "$repo"/bin/*; do
     echo "link  $BIN/$(basename "$f")"
 done
 
-ln -sfn "$repo/zellij/ai.kdl" "$LAYOUTS/ai.kdl"
-echo "link  $LAYOUTS/ai.kdl"
+# 레이아웃은 ai 가 고른 패널로 매번 생성하므로 미리 깔지 않는다.
+rm -f "$LAYOUTS/ai.kdl"
 
 # SessionEnd 훅 등록 — Claude Code 와 Gemini CLI 는 같은 스키마를 쓴다.
 # 기존 설정은 보존하고 hooks 키만 병합한다.

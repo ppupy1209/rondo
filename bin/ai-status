@@ -5,8 +5,8 @@
 
   claude       statusLine 이 남긴 캐시 (모델) + 계정 단위 한도 캐시 (5시간/주간)
   codex        ~/.codex/state_5.sqlite 의 threads (모델 · 누적 토큰)
-  antigravity  ~/.gemini/antigravity-cli/conversations/*.db (모델)
-  gemini·kimi·grok  로컬에 상태를 남기지 않음 — "-" 로 표시
+  gemini       Antigravity(agy) 대화 DB 에서 모델명만. 사용량은 디스크에 안 남는다
+  kimi·grok    로컬에 상태를 남기지 않음 — "-" 로 표시
 
 열려 있는 패널만 표시한다(zellij dump-layout 기준). 한 번만 출력하려면 --once.
 """
@@ -49,16 +49,23 @@ def repo_root():
 
 
 def query(path, sql, args=()):
-    """쓰기 중인 DB 도 읽히도록 immutable 로 연다. 잠금·-shm 문제를 피한다."""
+    """읽기 전용으로 연다.
+
+    immutable=1 을 먼저 쓰면 안 된다 — WAL 을 통째로 무시해서 최근 커밋이 안 보인다
+    (codex DB 는 WAL 이고 -wal 이 수 MB 다). 잠겨서 mode=ro 가 실패할 때만
+    immutable 로 물러선다.
+    """
     if not os.path.exists(path):
         return None
-    try:
-        con = sqlite3.connect("file:%s?immutable=1" % path, uri=True, timeout=1)
-        row = con.execute(sql, args).fetchone()
-        con.close()
-        return row
-    except sqlite3.Error:
-        return None
+    for mode in ("mode=ro", "immutable=1"):
+        try:
+            con = sqlite3.connect("file:%s?%s" % (path, mode), uri=True, timeout=1)
+            row = con.execute(sql, args).fetchone()
+            con.close()
+            return row
+        except sqlite3.Error:
+            continue
+    return None
 
 
 def short_model(name):
@@ -140,7 +147,7 @@ def codex_field(root):
     return " ".join(bits)
 
 
-def antigravity_field(_root):
+def gemini_field(_root):
     # ponytail: 대화 DB 가 protobuf blob 이라 모델명만 문자열로 긁는다.
     # 토큰·한도는 스키마를 알아야 하므로 생략. agy 가 평문 필드를 노출하면 교체.
     try:
@@ -161,8 +168,7 @@ def antigravity_field(_root):
 AGENTS = [
     ("claude", claude_field),
     ("codex", codex_field),
-    ("antigravity", antigravity_field),
-    ("gemini", None),
+    ("gemini", gemini_field),
     ("kimi", None),
     ("grok", None),
 ]
