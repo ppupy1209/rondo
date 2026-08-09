@@ -96,6 +96,25 @@ class RondoTests(unittest.TestCase):
         self.assertEqual(socket_dir, f"/tmp/rondo-{os.getuid()}")
         opener.assert_called_once_with()
 
+    def test_bare_rondo_opens_actions_inside_its_shell_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["main"].__globals__
+        home = unittest.mock.Mock(return_value=0)
+        opener = unittest.mock.Mock()
+        with (
+            patch.dict(
+                scope["os"].environ,
+                {"ZELLIJ_SESSION_NAME": "rondo-project", "RONDO_AGENT": ""},
+                clear=True,
+            ),
+            patch.dict(scope, {"home_command": home, "open_session": opener}),
+            patch.object(scope["sys"], "argv", ["rondo"]),
+        ):
+            self.assertEqual(rondo["main"](), 0)
+
+        home.assert_called_once_with()
+        opener.assert_not_called()
+
     def test_exited_zellij_sessions_are_not_treated_as_active(self):
         rondo = load_script("rondo", self.config, self.cache)
         active, exited = rondo["parse_session_list"](
@@ -656,6 +675,58 @@ class RondoTests(unittest.TestCase):
             self.assertEqual(knowledge_lib.load(repo)["pending"], [])
             self.assertEqual(len(knowledge_lib.load(repo)["memories"]), 1)
 
+    def test_knowledge_menu_manages_items_without_typing_an_id(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        from rondo import knowledge as knowledge_lib
+
+        repo = self.base / "repo"
+        repo.mkdir()
+        proposal = knowledge_lib.propose(repo, "memory", "Use UTC timestamps.")
+        active = knowledge_lib.propose(repo, "memory", "Keep APIs compatible.")
+        knowledge_lib.approve(repo, active["id"], actor="human")
+        scope = rondo["knowledge_review_command"].__globals__
+        learn = unittest.mock.Mock(return_value=0)
+        with patch.dict(scope, {
+            "repo_root": lambda: repo,
+            "require_git_repo": lambda _root: None,
+            "_knowledge_require_user_terminal": lambda: None,
+            "choose_one": unittest.mock.Mock(
+                side_effect=[
+                    f"pending:{proposal['id']}", "approve",
+                    f"active:{active['id']}", "remove",
+                ]
+            ),
+            "learn_command": learn,
+        }):
+            self.assertEqual(rondo["knowledge_review_command"](), 0)
+            self.assertEqual(rondo["knowledge_review_command"](), 0)
+
+        self.assertEqual(
+            learn.call_args_list,
+            [
+                unittest.mock.call(["approve", proposal["id"]]),
+                unittest.mock.call(["remove", active["id"]]),
+            ],
+        )
+
+    def test_agent_started_tests_choose_saved_other_agents_without_a_menu(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["_testers"].__globals__
+        chooser = unittest.mock.Mock()
+        with (
+            patch.dict(scope["os"].environ, {"RONDO_AGENT": "codex"}, clear=True),
+            patch.dict(scope, {
+                "repo_root": lambda: self.base,
+                "git_reviewers": lambda _root: [],
+                "configured_panels": lambda: ["codex", "claude"],
+                "installed": lambda _name: True,
+                "choose_agents": chooser,
+            }),
+        ):
+            self.assertEqual(rondo["_testers"]([]), ["claude"])
+
+        chooser.assert_not_called()
+
     def test_knowledge_decisions_require_a_user_terminal_or_shell_tab(self):
         rondo = load_script("rondo", self.config, self.cache)
         confirm = rondo["_knowledge_confirm"]
@@ -956,7 +1027,10 @@ class AgentSessionTests(unittest.TestCase):
             patch.object(scope["subprocess"], "run", return_value=done) as run,
         ):
             self.assertEqual(self.runner["run"]("codex", []), 0)
-        run.assert_called_once_with(["/bin/codex", "resume", "--last"])
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], "/bin/codex")
+        self.assertIn("resume", command)
+        self.assertIn("--last", command)
 
     def test_agent_session_exports_implementation_identity(self):
         scope = self.runner["run"].__globals__
@@ -987,6 +1061,19 @@ class AgentSessionTests(unittest.TestCase):
         self.assertIn("${base_prompt}", agent_file.read_text())
         if os.name != "nt":
             self.assertEqual(agent_file.stat().st_mode & 0o777, 0o600)
+
+    def test_natural_requests_are_mapped_to_rondo_actions_for_every_agent(self):
+        for agent in ("claude", "codex", "gemini", "kimi", "grok"):
+            resume, fresh, _ = self.runner["session_commands"](
+                agent, "default", root=self.base
+            )
+            text = " ".join(resume or fresh)
+            if agent == "kimi":
+                path = Path(fresh[fresh.index("--agent-file") + 1])
+                text = path.read_text()
+            self.assertIn("rondo learn memory", text)
+            self.assertIn("rondo test", text)
+            self.assertIn("rondo code-review all", text)
 
     def test_only_approved_knowledge_reaches_agent_native_entry_points(self):
         memory = self.knowledge.propose(

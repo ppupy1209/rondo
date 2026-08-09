@@ -40,6 +40,29 @@ def handoff_prompt(agent: str) -> str | None:
     return f"[Rondo resume] Read this handoff file and continue the current work: {path}"
 
 
+def action_guidance(language: str) -> str:
+    if language == "ko":
+        return (
+            "[Rondo 자연어 작업] 사용자가 Rondo 명령을 외우게 하지 마세요. 명시적으로 기억을 요청하면 "
+            "사실은 `rondo learn memory ...`, 반복 절차는 `rondo learn skill ...`로 직접 제안하세요. "
+            "독립 테스트를 요청하면 구현 세션에서 스스로 검증하지 말고 `rondo test` 또는 요청 범위의 "
+            "test 프로필을 실행하세요. 테스트 진행 확인과 결과 수집은 각각 `rondo test status`, "
+            "`rondo test finish`를 사용하세요. 검증 증거는 `rondo proof`, 독립 코드 리뷰는 "
+            "`rondo code-review all`, 과거 맥락 검색은 `rondo recall ...`을 사용하세요. 실행한 동작을 "
+            "짧게 알려주되 승인·거절·삭제, PR·push·merge, undo는 사용자의 명시적 요청 없이 실행하지 마세요."
+        )
+    return (
+        "[Rondo natural actions] Do not make the user memorize Rondo syntax. When explicitly asked to "
+        "remember something, directly propose a fact with `rondo learn memory ...` or a repeatable procedure "
+        "with `rondo learn skill ...`. For independent testing, never verify in the implementation session; "
+        "run `rondo test` or the requested test profile; use `rondo test status` and `rondo test finish` to "
+        "check progress and collect results. Use `rondo proof` for evidence, "
+        "`rondo code-review all` for independent code review, and `rondo recall ...` for past context. Briefly "
+        "report the action, but never approve, reject, remove, create or merge a PR, push, or undo without an "
+        "explicit user request."
+    )
+
+
 def kimi_agent_file(mode: str, rule: str, root: Path) -> Path:
     directory = CACHE_DIR / "audience"
     if directory.is_symlink():
@@ -87,6 +110,7 @@ def session_commands(
             language = "en"
     rule = " ".join(filter(None, (
         audience.instruction(mode),
+        action_guidance(language),
         knowledge.guidance(root, language),
     )))
     git_policy = os.environ.get("RONDO_GIT_POLICY", "direct")

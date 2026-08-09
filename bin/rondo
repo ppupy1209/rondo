@@ -28,7 +28,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -72,6 +72,8 @@ TEXT = {
     "ko": {
         "usage": """사용법
   rondo                 이 프로젝트의 세션 열기 / 붙기
+                        이미 열린 shell 탭에서는 작업 메뉴 표시
+  rondo menu            테스트·검토·기억·설정 작업 메뉴
   rondo setup           언어·패널·승인·자동 인계 설정 변경
   rondo audience [단계] 설명 수준 선택 (default|nondev|guided)
   rondo add [에이전트]   현재 세션에 패널 추가
@@ -207,6 +209,24 @@ TEXT = {
         "doctor_changed": "벤더 업데이트로 깨진 항목",
         "select_auto_no_codex": "자동 인계에는 선택된 Codex 패널과 CLI가 필요합니다.",
         "send_usage": "사용법: rondo send <claude|codex|gemini|kimi|grok> <메시지>",
+        "home_title": "Rondo 작업 메뉴",
+        "home_test": "독립 테스트 시작",
+        "home_proof": "변경분 검증 증거 만들기",
+        "home_code_review": "독립 코드 리뷰 시작",
+        "home_knowledge": "프로젝트 지식 검토·삭제",
+        "home_recall": "프로젝트 기억·작업 이력 찾기",
+        "home_git": "Git·PR 정책 확인",
+        "home_setup": "Rondo 설정 변경",
+        "home_exit": "메뉴 닫기",
+        "home_recall_prompt": "찾을 내용을 입력하세요: ",
+        "learn_decision_title": "이 제안을 어떻게 처리할까요?",
+        "learn_menu_title": "프로젝트 지식을 선택하세요",
+        "learn_pending_state": "승인 대기",
+        "learn_active_state": "승인됨",
+        "learn_approve_action": "승인",
+        "learn_reject_action": "거절",
+        "learn_remove_action": "삭제",
+        "learn_back_action": "돌아가기",
         "empty_message": "보낼 메시지가 비어 있습니다.",
         "message_too_long": "메시지는 {max}자 이하여야 합니다.",
         "pane_missing": "{name} 패널을 찾지 못했습니다. `rondo add {name}`으로 먼저 여세요.",
@@ -320,6 +340,8 @@ TEXT = {
     "en": {
         "usage": """Usage
   rondo                 Open or attach to this project's session
+                        Show the action menu from an open shell tab
+  rondo menu            Open the test, review, knowledge, and settings menu
   rondo audience [mode] Choose explanation level (default|nondev|guided)
   rondo add [agent]     Add a pane to the current session
   rondo send <agent> <message>
@@ -453,6 +475,24 @@ Inside a session
         "doctor_changed": "Broken by a vendor update",
         "select_auto_no_codex": "Automatic relay requires a selected Codex pane and CLI.",
         "send_usage": "Usage: rondo send <claude|codex|gemini|kimi|grok> <message>",
+        "home_title": "Rondo actions",
+        "home_test": "Start independent tests",
+        "home_proof": "Build verification evidence",
+        "home_code_review": "Start independent code review",
+        "home_knowledge": "Review or remove project knowledge",
+        "home_recall": "Find project memory or work history",
+        "home_git": "Inspect Git and PR policy",
+        "home_setup": "Change Rondo settings",
+        "home_exit": "Close menu",
+        "home_recall_prompt": "What do you want to find? ",
+        "learn_decision_title": "What should happen to this proposal?",
+        "learn_menu_title": "Choose project knowledge",
+        "learn_pending_state": "pending",
+        "learn_active_state": "approved",
+        "learn_approve_action": "Approve",
+        "learn_reject_action": "Reject",
+        "learn_remove_action": "Remove",
+        "learn_back_action": "Back",
         "empty_message": "The message is empty.",
         "message_too_long": "Messages must be {max} characters or fewer.",
         "pane_missing": "No {name} pane was found. Open it with `rondo add {name}` first.",
@@ -1619,6 +1659,52 @@ def learn_command(args: list[str]) -> int:
     raise RuntimeError(t("learn_usage"))
 
 
+def knowledge_review_command() -> int:
+    from rondo import knowledge as knowledge_lib
+
+    root = repo_root()
+    require_git_repo(root)
+    _knowledge_require_user_terminal()
+    try:
+        state = knowledge_lib.load(root)
+    except knowledge_lib.KnowledgeError as error:
+        raise _knowledge_failure(error) from None
+    items = [
+        *(('pending', item) for item in state["pending"]),
+        *(('active', item) for item in [*state["memories"], *state["skills"]]),
+    ]
+    if not items:
+        return learn_command(["list"])
+
+    choices = []
+    for status, item in items:
+        label = f" · {item['name']}" if item.get("name") else ""
+        summary = " ".join(item["content"].split())[:80]
+        state_label = t(f"learn_{status}_state")
+        choices.append((
+            f"{status}:{item['id']}",
+            f"{state_label} · {item['id']} · {item['kind']}{label} — {summary}",
+        ))
+    status, selected = choose_one(t("learn_menu_title"), choices).split(":", 1)
+    actions = (
+        [
+            ("approve", t("learn_approve_action")),
+            ("reject", t("learn_reject_action")),
+            ("back", t("learn_back_action")),
+        ]
+        if status == "pending"
+        else [
+            ("remove", t("learn_remove_action")),
+            ("back", t("learn_back_action")),
+        ]
+    )
+    action = choose_one(
+        t("learn_decision_title"),
+        actions,
+    )
+    return 0 if action == "back" else learn_command([action, selected])
+
+
 def recall_command(args: list[str]) -> int:
     from rondo import knowledge as knowledge_lib
 
@@ -1970,8 +2056,17 @@ def _testers(values: list[str]) -> list[str]:
         name for value in values for name in value.replace(",", " ").split()
     ))
     if not names:
-        defaults = set(git_reviewers(repo_root()) or configured_panels())
-        names = choose_agents(defaults, t("test_tester_title"))
+        defaults = [
+            name for name in (git_reviewers(repo_root()) or configured_panels())
+            if installed(name)
+        ]
+        implementer = os.environ.get("RONDO_AGENT")
+        alternatives = [name for name in defaults if name != implementer]
+        defaults = alternatives or defaults
+        if implementer or not (sys.stdin.isatty() and sys.stdout.isatty()):
+            names = defaults
+        else:
+            names = choose_agents(set(defaults), t("test_tester_title"))
     if (
         not names
         or len(names) > MAX_PANELS
@@ -2519,6 +2614,40 @@ def undo_command(args: list[str]) -> int:
     return 0
 
 
+def home_command() -> int:
+    if os.environ.get("RONDO_AGENT"):
+        raise RuntimeError(t("learn_human_only"))
+    action = choose_one(
+        t("home_title"),
+        [
+            ("test", t("home_test")),
+            ("proof", t("home_proof")),
+            ("code-review", t("home_code_review")),
+            ("knowledge", t("home_knowledge")),
+            ("recall", t("home_recall")),
+            ("git", t("home_git")),
+            ("setup", t("home_setup")),
+            ("exit", t("home_exit")),
+        ],
+    )
+    if action == "test":
+        return test_command([])
+    if action == "proof":
+        return proof_command([])
+    if action == "code-review":
+        return code_review_command(["all"])
+    if action == "knowledge":
+        return knowledge_review_command()
+    if action == "recall":
+        query = input(t("home_recall_prompt")).strip()
+        return recall_command([query] if query else [])
+    if action == "git":
+        return git_command([])
+    if action == "setup":
+        setup()
+    return 0
+
+
 def main() -> int:
     configure_zellij_socket()
     args = sys.argv[1:]
@@ -2537,6 +2666,8 @@ def main() -> int:
         if len(args) > 1:
             raise RuntimeError("Usage: rondo clean")
         clean_cache()
+    elif command == "menu":
+        return home_command()
     elif command == "setup":
         setup()
     elif command == "add":
@@ -2591,7 +2722,7 @@ def main() -> int:
         return doctor("--deep" in args)
     elif command:
         known = [
-            "setup", "add", "send", "handoff", "resume", "task", "learn", "recall", "proof", "review",
+            "menu", "setup", "add", "send", "handoff", "resume", "task", "learn", "recall", "proof", "review",
             "git", "code-review", "test", "pr", "lens", "race", "diff", "take",
             "snap", "undo", "language", "audience", "relay", "continue", "doctor",
             "kill", "clean",
@@ -2602,6 +2733,11 @@ def main() -> int:
             message += ". " + t("unknown_suggestion", name=suggestion[0])
         raise RuntimeError(message)
     else:
+        if (
+            os.environ.get("ZELLIJ_SESSION_NAME", "").startswith("rondo-")
+            and not os.environ.get("RONDO_AGENT")
+        ):
+            return home_command()
         open_session()
     return 0
 

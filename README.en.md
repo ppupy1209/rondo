@@ -60,7 +60,8 @@ Existing `ai-tools` installations are migrated on first run. The old `ai`, `ai-s
 
 ```sh
 cd ~/projects/my-project
-rondo             # open or attach to the project's persistent workspace
+rondo             # open outside; show actions from the workspace shell tab
+rondo menu        # explicitly open the test, review, knowledge, and settings menu
 rondo setup       # change saved language, explanation, approval, agents, and relay
 rondo audience    # change how every agent explains its results
 rondo add         # select and add another agent pane
@@ -75,6 +76,18 @@ rondo doctor      # diagnose dependencies and configuration
 ```
 
 The first `rondo` launch opens setup automatically. Move with arrow keys, select up to four agents with Space, and save with Enter. Names and modes never need to be typed.
+
+For everyday use, you do not need to memorize subcommands. Ask naturally in an agent pane and that agent starts the matching Rondo action.
+
+```text
+Remember this rule for the project
+Independently test the current changes
+Run only the security tests in a fresh session
+Have every configured agent review the code
+Find our earlier authentication work
+```
+
+Human decisions such as approving a memory proposal are never automated. Run bare `rondo` from the `shell` tab, select the proposal with the arrow keys, inspect the original text, then approve or reject it. Existing commands such as `rondo learn` and `rondo test` remain available for scripts and precise control.
 
 ```text
 ┌────────────────────────────────────────────────────┐
@@ -137,6 +150,8 @@ Before delivery, Rondo reads the pane screen and stops without pressing a key wh
 ## Human-approved project knowledge
 
 Rondo keeps durable repository facts and reusable procedures. Users and agents can both propose entries, but a proposal never appears in search results or agent launch guidance until a person approves it. Agents cannot read pending text through `list` or `show`, either.
+
+Most users can simply tell an agent to “remember this,” then select the proposal from the bare `rondo` menu in the `shell` tab. The commands below remain useful for direct control and automation.
 
 ```sh
 rondo learn memory "Public API changes require a compatibility note"
@@ -364,7 +379,8 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 
 | Command | Purpose |
 |---|---|
-| `rondo` | Run first-time setup, then open or attach directly thereafter |
+| `rondo` | Open or attach outside; show the action menu from an open shell tab |
+| `rondo menu` | Show test, verification, code-review, knowledge, Git, and settings actions |
 | `rondo setup` | Change language, explanation, approval, up to four panes, and relay |
 | `rondo audience [default\|nondev\|guided]` | Change how every agent explains its results |
 | `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
