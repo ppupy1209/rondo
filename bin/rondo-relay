@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""Create and claim provider-neutral continuity packets."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
+MAX_TRANSCRIPT_BYTES = 2_000_000
+MAX_MESSAGE_CHARS = 6_000
+MAX_PACKET_CHARS = 30_000
+
+SECRET_PATTERNS = (
+    re.compile(r"\b(sk-[A-Za-z0-9_-]{12,})\b"),
+    re.compile(r"\b(gh[oprsu]_[A-Za-z0-9]{12,})\b"),
+    re.compile(r"(?i)(api[_-]?key|access[_-]?token|authorization)(\s*[:=]\s*)([^\s]+)"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{12,}=*"),
+)
+
+
+def redact(value: str) -> str:
+    text = value
+    for pattern in SECRET_PATTERNS:
+        if pattern.groups >= 3:
+            text = pattern.sub(r"\1\2[REDACTED]", text)
+        else:
+            text = pattern.sub("[REDACTED]", text)
+    return text
+
+
+def read_setting(name: str, default: str) -> str:
+    try:
+        return (CONFIG_DIR / name).read_text().strip()
+    except OSError:
+        return default
+
+
+def run_git(root: Path, *args: str, limit: int = 12_000) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True, timeout=8
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return redact(result.stdout.strip()[:limit]) if result.returncode == 0 else ""
+
+
+def git_root(path: Path) -> Path | None:
+    value = run_git(path, "rev-parse", "--show-toplevel", limit=2_000)
+    return Path(value) if value else None
+
+
+def repo_key(root: Path) -> str:
+    return hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+
+
+def relay_dir(root: Path) -> Path:
+    return CACHE_DIR / "relay" / repo_key(root)
+
+
+def atomic_write(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(value)
+    os.chmod(temp, 0o600)
+    temp.replace(path)
+
+
+def extract_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text", "")))
+    return "\n".join(part for part in parts if part)
+
+
+def recent_messages(transcript: Path) -> list[tuple[str, str]]:
+    try:
+        with transcript.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - MAX_TRANSCRIPT_BYTES))
+            blob = stream.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    if size > MAX_TRANSCRIPT_BYTES:
+        blob = blob.split("\n", 1)[-1]
+
+    messages: list[tuple[str, str]] = []
+    for line in blob.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        role = row.get("type")
+        message = row.get("message")
+        if role not in ("user", "assistant") or not isinstance(message, dict):
+            continue
+        text = redact(extract_text(message.get("content")).strip())
+        if text:
+            messages.append((role, text[:MAX_MESSAGE_CHARS]))
+    return messages[-8:]
+
+
+def active_limit(source: dict) -> tuple[float, int, str] | None:
+    now = time.time()
+    candidates = []
+    for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
+        window = (source.get("rate_limits") or {}).get(key) or {}
+        reset = int(window.get("resets_at") or 0)
+        if reset > now and "used_percentage" in window:
+            candidates.append((100.0 - float(window["used_percentage"]), reset, label))
+    return min(candidates, default=None)
+
+
+def packet_markdown(source: dict, root: Path) -> str:
+    branch = run_git(root, "branch", "--show-current") or "(detached)"
+    head = run_git(root, "rev-parse", "--short", "HEAD") or "-"
+    status = run_git(root, "status", "--short") or "clean"
+    diff_stat = run_git(root, "diff", "--stat") or "no unstaged diff"
+    staged_stat = run_git(root, "diff", "--cached", "--stat") or "no staged diff"
+    commits = run_git(root, "log", "-5", "--pretty=format:%h %s") or "-"
+    transcript = Path(str(source.get("transcript_path") or ""))
+    messages = recent_messages(transcript) if transcript.is_file() else []
+    limit = active_limit(source)
+    reason = f"Claude {limit[2]} allowance reached {limit[0]:.1f}% remaining" if limit else "manual handoff"
+
+    conversation = []
+    for role, text in messages:
+        label = "User" if role == "user" else "Claude"
+        conversation.append(f"### {label}\n\n{text}")
+    if not conversation:
+        conversation.append("No transcript excerpt was available. Infer the task from the workspace and ask only if blocked.")
+
+    return f"""# Rondo Continuity Packet
+
+Generated locally at {time.strftime('%Y-%m-%d %H:%M:%S %z')}.
+
+## Handoff contract
+
+- Source: Claude Code
+- Target: Codex CLI
+- Reason: {reason}
+- Project: {root}
+- Branch: {branch}
+- HEAD: {head}
+- Claude session: {source.get('session_id') or '-'}
+
+Continue from the current workspace. Do not redo completed work. Inspect the actual diff before editing, finish the latest user request, and run proportionate checks. Do not push, deploy, rename remotes, or perform destructive operations. Stop and report if a decision requires the user.
+
+## Recent intent and progress
+
+{chr(10).join(conversation)}
+
+## Working tree
+
+```text
+{status}
+```
+
+### Unstaged diff summary
+
+```text
+{diff_stat}
+```
+
+### Staged diff summary
+
+```text
+{staged_stat}
+```
+
+### Recent commits
+
+```text
+{commits}
+```
+"""[:MAX_PACKET_CHARS]
+
+
+def claim_marker(directory: Path, source: dict) -> Path | None:
+    limit = active_limit(source)
+    reset = limit[1] if limit else int(time.time())
+    session = re.sub(r"[^A-Za-z0-9_.-]", "-", str(source.get("session_id") or "unknown"))
+    marker = directory / "markers" / f"{session}-{reset}"
+    marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        return marker
+    except FileExistsError:
+        return None
+
+
+def write_index(directory: Path, packet: Path, root: Path, status: str, **extra: object) -> None:
+    payload = {
+        "schema": 1,
+        "packet": str(packet),
+        "root": str(root),
+        "status": status,
+        "updated_at": int(time.time()),
+        **extra,
+    }
+    atomic_write(directory / "pending.json", json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def codex_prompt(packet_path: Path) -> str:
+    if read_setting("language", "en") == "ko":
+        return f"[Rondo · Claude → Codex] Claude가 작업을 위임했습니다. 인계 파일을 읽고 현재 작업을 이어서 완료하세요: {packet_path}"
+    return f"[Rondo · Claude → Codex] Claude delegated this task. Read the continuity packet and continue the current work: {packet_path}"
+
+
+def run_auto(directory: Path, packet_path: Path, root: Path) -> int:
+    log = directory / "codex.log"
+    write_index(directory, packet_path, root, "running", log=str(log))
+    rondo = Path(__file__).resolve().with_name("rondo")
+    try:
+        result = subprocess.run(
+            [str(rondo), "send", "codex", codex_prompt(packet_path)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        atomic_write(log, f"rondo: {error}\n")
+        write_index(directory, packet_path, root, "failed", log=str(log))
+        return 1
+    output = result.stdout + result.stderr
+    if output:
+        atomic_write(log, output)
+    status = "sent" if result.returncode == 0 else "failed"
+    write_index(directory, packet_path, root, status, log=str(log), result=result.returncode)
+    return result.returncode
+
+
+def capture(source_path: Path) -> int:
+    try:
+        source = json.loads(source_path.read_text())
+    except (OSError, ValueError) as error:
+        print(f"rondo-relay: invalid source: {error}", file=sys.stderr)
+        return 1
+    root_value = (source.get("workspace") or {}).get("project_dir") or source.get("cwd")
+    root = git_root(Path(root_value)) if root_value else None
+    if root is None:
+        return 0
+    directory = relay_dir(root)
+    marker = claim_marker(directory, source)
+    if marker is None:
+        source_path.unlink(missing_ok=True)
+        return 0
+    try:
+        packet = packet_markdown(source, root)
+        name = f"{int(time.time())}-{str(source.get('session_id') or 'claude')[:8]}.md"
+        packet_path = directory / "packets" / name
+        atomic_write(packet_path, packet)
+        mode = read_setting("relay", "ready")
+        write_index(directory, packet_path, root, "ready", mode=mode)
+        if mode == "auto":
+            return run_auto(directory, packet_path, root)
+        return 0
+    except Exception:
+        marker.unlink(missing_ok=True)
+        raise
+    finally:
+        source_path.unlink(missing_ok=True)
+
+
+def continue_pending() -> int:
+    root = git_root(Path.cwd())
+    if root is None:
+        print("rondo-relay: run inside a Git repository", file=sys.stderr)
+        return 1
+    directory = relay_dir(root)
+    try:
+        index = json.loads((directory / "pending.json").read_text())
+        if index.get("status") != "ready":
+            raise ValueError("relay is not ready")
+        packet_path = Path(index["packet"])
+        if not packet_path.is_file():
+            raise OSError("relay packet is missing")
+    except (OSError, ValueError, KeyError):
+        print("rondo-relay: no pending relay for this repository", file=sys.stderr)
+        return 1
+    return run_auto(directory, packet_path, root)
+
+
+def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--capture":
+        return capture(Path(sys.argv[2]))
+    if len(sys.argv) == 2 and sys.argv[1] == "--continue":
+        return continue_pending()
+    print("usage: rondo-relay --capture SOURCE.json | --continue", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

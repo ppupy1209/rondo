@@ -1,12 +1,12 @@
 #!/bin/sh
-# bin/ 과 zellij 레이아웃을 symlink 로 건다. symlink 라서 이후에는 git pull 만으로 반영된다.
-# 새 파일이 추가됐을 때만 다시 실행하면 된다. 여러 번 실행해도 안전.
+# Install Rondo commands as symlinks. A git pull updates them immediately.
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-BIN="$HOME/.local/bin"
-LAYOUTS="$HOME/.config/zellij/layouts"
-SETTINGS="$HOME/.claude/settings.json"
+RONDO_USER_HOME="${RONDO_HOME:-$HOME}"
+BIN="$RONDO_USER_HOME/.local/bin"
+LAYOUTS="$RONDO_USER_HOME/.config/zellij/layouts"
+SETTINGS="$RONDO_USER_HOME/.claude/settings.json"
 
 mkdir -p "$BIN" "$LAYOUTS"
 
@@ -15,23 +15,27 @@ for f in "$repo"/bin/*; do
     echo "link  $BIN/$(basename "$f")"
 done
 
-# 레이아웃은 ai 가 고른 패널로 매번 생성하므로 미리 깔지 않는다.
+# Layouts are generated from the selected panes at runtime.
 rm -f "$LAYOUTS/ai.kdl"
 
 # SessionEnd 훅 등록 — Claude Code 와 Gemini CLI 는 같은 스키마를 쓴다.
 # 기존 설정은 보존하고 hooks 키만 병합한다.
 # Codex 는 세션 종료 이벤트가 없어 zellij 레이아웃에서 종료 직후 실행한다.
 if command -v python3 >/dev/null 2>&1; then
-    python3 - "$SETTINGS" "$HOME/.gemini/settings.json" <<'PY'
+    python3 - "$SETTINGS" "$RONDO_USER_HOME/.gemini/settings.json" <<'PY'
 import json, os, shutil, sys
 
 for path, agent in zip(sys.argv[1:], ("Claude", "Gemini")):
     entry = {"type": "command", "command": "handoff " + agent}
     cfg = {}
-    if os.path.exists(path):
-        shutil.copy(path, path + ".bak")
-        with open(path) as fh:
-            cfg = json.load(fh)
+    existed = os.path.exists(path)
+    if existed:
+        try:
+            with open(path) as fh:
+                cfg = json.load(fh)
+        except (OSError, ValueError) as error:
+            print("skip  %-6s 설정 파일을 읽을 수 없음: %s" % (agent, error))
+            continue
 
     changed = False
     hooks = cfg.setdefault("hooks", {}).setdefault("SessionEnd", [])
@@ -42,20 +46,29 @@ for path, agent in zip(sys.argv[1:], ("Claude", "Gemini")):
         changed = True
         print("hook  %-6s SessionEnd 등록" % agent)
 
-    # 모델·컨텍스트·5시간/주간 한도 표시. 이미 statusLine 이 있으면 건드리지 않는다.
+    # Keep custom status lines. The legacy command is a compatibility alias.
     if agent == "Claude":
         if cfg.get("statusLine"):
             print("status Claude 기존 statusLine 유지")
         else:
-            cfg["statusLine"] = {"type": "command", "command": "claude-statusline"}
+            cfg["statusLine"] = {
+                "type": "command",
+                "command": "rondo-claude-status",
+                "refreshInterval": 5,
+            }
             changed = True
-            print("status Claude statusLine 등록")
+            print("status Claude Rondo statusLine 등록")
 
     if changed:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as fh:
+        if existed and not os.path.exists(path + ".bak"):
+            shutil.copy(path, path + ".bak")
+        temp = path + ".rondo.tmp"
+        with open(temp, "w") as fh:
             json.dump(cfg, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
+        os.chmod(temp, 0o600)
+        os.replace(temp, path)
 PY
 else
     echo "hook  python3 없음 — SessionEnd 훅은 직접 등록 필요" >&2
@@ -68,5 +81,7 @@ esac
 
 echo
 echo "완료. 사용법:"
-echo "  ai              프로젝트별 AI 세션 열기"
+echo "  rondo setup     언어·패널·인계 설정"
+echo "  rondo           프로젝트 세션 열기"
+echo "  rondo doctor    설치 상태 확인"
 echo "  handoff --init  이 레포에서 핸드오프 기록 켜기"

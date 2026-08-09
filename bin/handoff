@@ -10,18 +10,31 @@
 set -eu
 
 KEEP=20
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rondo"
+LANGUAGE=$(cat "$CONFIG_DIR/language" 2>/dev/null || printf en)
+if [ "$LANGUAGE" = ko ]; then
+    SECTION='## 현재 단계'
+    UPDATE='> 업데이트:'
+    INIT='# 핸드오프\n\n> 업데이트: -\n\n## 현재 단계\n\n## 다음 액션\n\n- \n'
+    ARCHIVE_TITLE='# 현재 단계 아카이브\n\n> 본문에서 밀려난 항목. 최신이 위.\n'
+else
+    SECTION='## Current stage'
+    UPDATE='> Updated:'
+    INIT='# Handoff\n\n> Updated: -\n\n## Current stage\n\n## Next actions\n\n- \n'
+    ARCHIVE_TITLE='# Current stage archive\n\n> Entries moved out of the active document. Newest first.\n'
+fi
 
 # 작업 레포 찾기 — 훅은 임의의 cwd 에서 실행될 수 있다
 root="${CLAUDE_PROJECT_DIR:-}"
 [ -n "$root" ] || root=$(git rev-parse --show-toplevel 2>/dev/null || true)
-[ -n "$root" ] || { echo "handoff: git 레포가 아님" >&2; exit 0; }
+[ -n "$root" ] || { echo "handoff: not a Git repository" >&2; exit 0; }
 cd "$root"
 
 if [ "${1:-}" = "--init" ]; then
-    [ -f docs/handoff.md ] && { echo "handoff: docs/handoff.md 이미 있음"; exit 0; }
+    [ -f docs/handoff.md ] && { echo "handoff: docs/handoff.md already exists"; exit 0; }
     mkdir -p docs
-    printf '# 핸드오프\n\n> 업데이트: -\n\n## 현재 단계\n\n## 다음 액션\n\n- \n' > docs/handoff.md
-    echo "handoff: docs/handoff.md 생성"
+    printf '%b' "$INIT" > docs/handoff.md
+    echo "handoff: created docs/handoff.md"
     exit 0
 fi
 
@@ -35,7 +48,16 @@ if [ -z "$STATUS" ]; then
     done
 fi
 [ -n "$STATUS" ] || exit 0
-grep -q '^## 현재 단계$' "$STATUS" || { echo "handoff: $STATUS 에 '## 현재 단계' 없음" >&2; exit 0; }
+if grep -q '^## 현재 단계$' "$STATUS"; then
+    SECTION='## 현재 단계'
+    UPDATE='> 업데이트:'
+elif grep -q '^## Current stage$' "$STATUS"; then
+    SECTION='## Current stage'
+    UPDATE='> Updated:'
+else
+    echo "handoff: $STATUS has no current-stage section" >&2
+    exit 0
+fi
 
 ARCHIVE="$(dirname "$STATUS")/archive/$(basename "$STATUS" .md)-log.md"
 MARK=.git/handoff-head   # 세션 간 기준 커밋. .git 안이라 커밋되지 않는다
@@ -57,12 +79,12 @@ tmp=$(mktemp)
 overflow=$(mktemp)
 
 # 1) 새 항목 삽입 + 업데이트 줄 갱신 (여러 줄이라 -v 대신 환경변수로 넘긴다)
-NEW="$new" awk -v agent="$AGENT" -v today="$(date +%F)" '
+NEW="$new" awk -v agent="$AGENT" -v today="$(date +%F)" -v section="$SECTION" -v update="$UPDATE" '
     BEGIN { new = ENVIRON["NEW"]; if (new == "") added = 1 }
-    /^> 업데이트:/ && new != "" { print "> 업데이트: " today " · " agent; next }
+    index($0, update) == 1 && new != "" { print update " " today " · " agent; next }
     /^## / {
         if (insec && !added) { print new; added = 1 }
-        insec = ($0 ~ /^## 현재 단계$/)
+        insec = ($0 == section)
         print; next
     }
     insec && !added && /^- / { print new; added = 1 }
@@ -70,8 +92,8 @@ NEW="$new" awk -v agent="$AGENT" -v today="$(date +%F)" '
     END { if (insec && !added) print new }
 ' "$STATUS" |
 # 2) KEEP 개 초과분을 overflow 로 분리 (빠진 자리에 남는 빈 줄도 접는다)
-awk -v keep="$KEEP" -v ovf="$overflow" '
-    /^## / { if (!blank && NR > 1) print ""; insec = ($0 ~ /^## 현재 단계$/); drop = 0 }
+awk -v keep="$KEEP" -v ovf="$overflow" -v section="$SECTION" '
+    /^## / { if (!blank && NR > 1) print ""; insec = ($0 == section); drop = 0 }
     insec && /^- / { drop = (++n > keep); if (drop) { print > ovf; next } }
     insec && drop && /^[ \t]+/ { print > ovf; next }   # 항목에 딸린 하위 줄
     insec && drop && /^[ \t]*$/ { next }               # 항목에 딸린 빈 줄
@@ -80,7 +102,7 @@ awk -v keep="$KEEP" -v ovf="$overflow" '
 ' > "$tmp"
 
 # 안전장치: awk 가 실패해 결과가 비거나 섹션이 사라지면 원본을 건드리지 않는다
-if [ ! -s "$tmp" ] || ! grep -q '^## 현재 단계$' "$tmp"; then
+if [ ! -s "$tmp" ] || ! grep -Fqx "$SECTION" "$tmp"; then
     rm -f "$tmp" "$overflow"
     echo "handoff: 생성 결과 이상 — $STATUS 유지" >&2
     exit 1
@@ -88,7 +110,7 @@ fi
 
 moved=$(wc -l < "$overflow" | tr -d ' ')
 if [ -s "$overflow" ]; then
-    [ -f "$ARCHIVE" ] || printf '# 현재 단계 아카이브\n\n> 본문에서 밀려난 항목. 최신이 위.\n' > "$ARCHIVE"
+    [ -f "$ARCHIVE" ] || printf '%b' "$ARCHIVE_TITLE" > "$ARCHIVE"
     { printf '\n## %s 정리\n\n' "$(date +%F)"; cat "$overflow"; } >> "$ARCHIVE"
 fi
 

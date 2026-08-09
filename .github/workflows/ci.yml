@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python checks
+        run: |
+          python3 -m py_compile bin/rondo bin/rondo-relay bin/rondo-claude-status bin/ai-status
+          python3 -m unittest discover -s tests -v
+      - name: Shell checks
+        run: |
+          sh -n install.sh bin/ai bin/rondo-status bin/claude-statusline bin/*-session bin/handoff
+          RONDO_HOME="$RUNNER_TEMP/rondo-home" sh install.sh
+          RONDO_HOME="$RUNNER_TEMP/rondo-home" sh install.sh
