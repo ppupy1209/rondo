@@ -169,8 +169,14 @@ claude Sonnet 5   codex gpt-5.6-sol xhigh 45.2M tok   antigravity -   kimi -   g
 | Codex | `~/.codex/state_5.sqlite` 의 `threads` | 모델 · reasoning effort · 스레드 누적 토큰 |
 | Antigravity · Kimi · Grok | 없음 | `-` |
 
+> **값이 `-` 로만 나온다면** 대개 둘 중 하나다.
+>
+> 1. **레포 밖에서 `ai` 를 실행했다.** 데이터를 프로젝트 경로로 찾기 때문에, 홈 디렉터리에서 띄우면 Codex 는 항상 `-` 다. 프로젝트 안에서 `ai` 를 실행할 것.
+> 2. **해당 CLI 가 아직 아무것도 안 했다.** 첫 실행 화면(트러스트 프롬프트, 훅 검토, 업데이트 안내)에서 멈춰 있으면 세션이 시작되지 않아 로컬에 아무 기록도 남지 않는다. 프롬프트를 넘기고 메시지를 한 번 보내야 채워진다.
+
 주의할 점:
 
+- **Claude 의 5시간/주간 한도는 메시지를 한 번 보낸 뒤에 나온다.** `rate_limits` 는 첫 API 응답 이후에만 statusLine 에 실린다. 세션을 새로 띄우면 잠시 비는데, 캐시는 직전 값을 유지하다가 새 값으로 바꾼다.
 - **Claude 값은 Claude Code 를 한 번 띄워야 채워진다.** statusLine 이 그릴 때 캐시가 쓰인다. 1시간 지난 값은 버린다.
 - Codex 의 `43.4M tok` 은 현재 컨텍스트가 아니라 **스레드 누적 토큰**이다. Claude 의 `ctx 29%` 와 다른 의미다.
 - Codex 는 `thread_source='user'` 로 걸러 `codex-auto-review` 같은 서브에이전트 스레드를 제외한다.

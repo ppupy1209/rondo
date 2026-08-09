@@ -59,9 +59,19 @@ def stash(data, used, limits):
     project = (data.get("workspace") or {}).get("project_dir") or data.get("cwd")
     if not project:
         return
+    path = os.path.join(CACHE, "claude.%s.json" % os.path.basename(project))
+
+    # rate_limits 는 첫 API 응답 전까지 비어 있다. 그 사이 렌더에서 이미 받아둔 값을
+    # 빈 값으로 덮으면 바에서 사라지므로, 새 값이 없으면 직전 값을 유지한다.
+    if not limits:
+        try:
+            with open(path) as fh:
+                limits = json.load(fh).get("rate_limits") or {}
+        except (OSError, ValueError):
+            limits = {}
+
     try:
         os.makedirs(CACHE, exist_ok=True)
-        path = os.path.join(CACHE, "claude.%s.json" % os.path.basename(project))
         with open(path, "w") as fh:
             json.dump(
                 {
