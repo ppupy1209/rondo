@@ -3,7 +3,8 @@ layout {
         pane split_direction="vertical" {
             pane name="claude" command="claude" size="50%"
             pane split_direction="horizontal" {
-                pane name="codex" command="codex"
+                // codex-session = codex 실행 후 handoff (Codex 는 세션 종료 훅이 없음)
+                pane name="codex" command="codex-session"
                 pane name="gemini" command="gemini"
             }
         }

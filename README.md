@@ -4,6 +4,7 @@ Claude Code · Codex · Gemini 를 프로젝트 단위로 함께 쓰기 위한 �
 
 - **`ai`** — 프로젝트마다 zellij 세션 하나. 한 화면에 AI 3개, 껐다 켜도 유지
 - **`handoff`** — 세션이 끝나면 그동안의 커밋을 레포의 핸드오프 문서에 기록
+- **`codex-session`** — `ai` 가 codex 패널에서 쓰는 래퍼. 직접 칠 일은 없다
 
 ## 설치
 
@@ -77,9 +78,17 @@ handoff --init
 
 `## 현재 단계` 헤딩이 있어야 동작한다.
 
-### Codex · Gemini
+### AI 별 연결 방식
 
-각 CLI 는 훅 규격이 달라 자동 연결은 안 돼 있다. 직접 실행하면 누가 했는지 기록에 남는다.
+| CLI | 방식 | 실행 시점 |
+|---|---|---|
+| Claude Code | `~/.claude/settings.json` 의 `SessionEnd` 훅 | 세션 종료 |
+| Gemini CLI | `~/.gemini/settings.json` 의 `SessionEnd` 훅 (Claude 와 같은 스키마) | 세션 종료 |
+| Codex CLI | `codex-session` 래퍼 (zellij 레이아웃이 실행) | codex 종료 직후 |
+
+Codex 만 래퍼인 이유: Codex 훅 이벤트에 **세션 종료가 없다**. `pre_tool_use` · `post_tool_use` · `session_start` · `user_prompt_submit` · `subagent_start` · `subagent_stop` · `pre_compact` · `post_compact` · `permission_request` 뿐이다. `notify` 키가 있지만 Computer Use 가 이미 쓰고 있어 건드리지 않는다.
+
+그래서 Codex 는 `ai` 로 띄운 세션에서만 자동 기록된다. `codex` 를 직접 실행했다면 끝나고 한 번:
 
 ```sh
 handoff Codex
@@ -94,7 +103,7 @@ handoff Codex
 ## 제거
 
 ```sh
-rm ~/.local/bin/ai ~/.local/bin/handoff ~/.config/zellij/layouts/ai.kdl
+rm ~/.local/bin/ai ~/.local/bin/handoff ~/.local/bin/codex-session ~/.config/zellij/layouts/ai.kdl
 ```
 
-`~/.claude/settings.json` 의 `hooks.SessionEnd` 항목도 지운다. 설치 시 만들어 둔 `.bak` 이 같은 위치에 있다.
+`~/.claude/settings.json` 과 `~/.gemini/settings.json` 의 `hooks.SessionEnd` 항목도 지운다. 설치 시 만들어 둔 `.bak` 이 각각 같은 위치에 있다.

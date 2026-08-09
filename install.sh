@@ -18,29 +18,32 @@ done
 ln -sfn "$repo/zellij/ai.kdl" "$LAYOUTS/ai.kdl"
 echo "link  $LAYOUTS/ai.kdl"
 
-# Claude Code SessionEnd 훅 등록 — 기존 설정은 보존하고 hooks 키만 병합
+# SessionEnd 훅 등록 — Claude Code 와 Gemini CLI 는 같은 스키마를 쓴다.
+# 기존 설정은 보존하고 hooks 키만 병합한다.
+# Codex 는 세션 종료 이벤트가 없어 zellij 레이아웃에서 종료 직후 실행한다.
 if command -v python3 >/dev/null 2>&1; then
-    python3 - "$SETTINGS" <<'PY'
+    python3 - "$SETTINGS" "$HOME/.gemini/settings.json" <<'PY'
 import json, os, shutil, sys
 
-path = sys.argv[1]
-entry = {"type": "command", "command": "handoff Claude"}
-cfg = {}
-if os.path.exists(path):
-    shutil.copy(path, path + ".bak")
-    with open(path) as fh:
-        cfg = json.load(fh)
+for path, agent in zip(sys.argv[1:], ("Claude", "Gemini")):
+    entry = {"type": "command", "command": "handoff " + agent}
+    cfg = {}
+    if os.path.exists(path):
+        shutil.copy(path, path + ".bak")
+        with open(path) as fh:
+            cfg = json.load(fh)
 
-hooks = cfg.setdefault("hooks", {}).setdefault("SessionEnd", [])
-if any(entry in group.get("hooks", []) for group in hooks):
-    print("hook  이미 등록됨")
-else:
+    hooks = cfg.setdefault("hooks", {}).setdefault("SessionEnd", [])
+    if any(entry in group.get("hooks", []) for group in hooks):
+        print("hook  %-6s 이미 등록됨" % agent)
+        continue
+
     hooks.append({"hooks": [entry]})
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
         json.dump(cfg, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
-    print("hook  SessionEnd 등록 (기존 파일은 .bak 로 백업)")
+    print("hook  %-6s SessionEnd 등록 (기존 파일은 .bak 로 백업)" % agent)
 PY
 else
     echo "hook  python3 없음 — SessionEnd 훅은 직접 등록 필요" >&2
