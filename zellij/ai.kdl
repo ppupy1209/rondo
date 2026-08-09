@@ -1,5 +1,7 @@
 layout {
     tab name="ai" focus=true {
+        // 패널별 모델·컨텍스트·사용 한도. 5초마다 갱신
+        pane name="status" command="ai-status" size=1 borderless=true
         pane split_direction="vertical" {
             pane name="claude" command="claude" size="50%"
             pane split_direction="horizontal" {

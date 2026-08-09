@@ -3,10 +3,18 @@
 
 Claude Code 가 stdin 으로 세션 JSON 을 넘긴다. rate_limits 는 구독 계정에서
 첫 API 응답 이후에만 들어오므로, 없으면 그 항목을 빼고 출력한다.
+
+부수적으로 파싱한 값을 캐시에 남긴다. Claude 밖에서는 이 데이터를 얻을 방법이
+없어서, zellij 상단 바(ai-status)가 이 파일을 읽는다.
 """
 import json
+import os
 import sys
 import time
+
+CACHE = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "ai-tools"
+)
 
 
 def remaining(epoch):
@@ -43,6 +51,30 @@ def main():
             )
 
     print(" · ".join(parts))
+    stash(data, used, limits)
+
+
+def stash(data, used, limits):
+    """ai-status 가 읽을 캐시. 프로젝트별 파일이라 레포마다 따로 남는다."""
+    project = (data.get("workspace") or {}).get("project_dir") or data.get("cwd")
+    if not project:
+        return
+    try:
+        os.makedirs(CACHE, exist_ok=True)
+        path = os.path.join(CACHE, "claude.%s.json" % os.path.basename(project))
+        with open(path, "w") as fh:
+            json.dump(
+                {
+                    "project": project,
+                    "model": (data.get("model") or {}).get("display_name"),
+                    "context_used": used,
+                    "rate_limits": limits,
+                    "at": int(time.time()),
+                },
+                fh,
+            )
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

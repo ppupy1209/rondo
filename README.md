@@ -4,7 +4,8 @@ Claude Code · Codex · Antigravity · Kimi · Grok 를 프로젝트 단위로 �
 
 - **`ai`** — 프로젝트마다 zellij 세션 하나. 한 화면에 AI 3개, 껐다 켜도 유지
 - **`handoff`** — 세션이 끝나면 그동안의 커밋을 레포의 핸드오프 문서에 기록
-- **`claude-statusline`** — Claude Code 상태줄에 모델·컨텍스트·5시간/주간 한도 표시
+- **`ai-status`** — 세션 최상단 바. 패널별 모델·컨텍스트·사용 한도
+- **`claude-statusline`** — Claude Code 상태줄. 위 바에 쓸 데이터도 남긴다
 - **`codex-session` · `agy-session`** — `ai` 가 패널에서 쓰는 래퍼. 직접 칠 일은 없다
 
 ## 설치
@@ -146,7 +147,34 @@ Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. �
 
 `install.sh` 가 `~/.claude/settings.json` 에 등록한다. **이미 `statusLine` 이 설정돼 있으면 건드리지 않는다** — 다른 statusline 플러그인을 쓰고 있다면 그쪽이 유지된다.
 
-Codex · Antigravity · Kimi · Grok 은 각자 자체 상태 표시를 쓴다. 동일한 통합 표시는 아직 없다.
+## `ai-status` — 상단 통합 바
+
+`ai` 세션 최상단 1행. 5초마다 갱신.
+
+```
+claude Opus 5 ctx 29% 5h 41%(2h11m) wk 63%(3d5h)   codex gpt-5.6-sol xhigh 43.4M tok   agy -   kimi -   grok -
+```
+
+각 CLI 가 **로컬에 남기는 것만** 읽는다. 저장된 자격증명으로 API 를 호출하지 않는다.
+
+| CLI | 출처 | 얻는 것 |
+|---|---|---|
+| Claude | `claude-statusline` 이 남기는 `~/.cache/ai-tools/claude.<레포>.json` | 모델 · 컨텍스트% · 5시간/주간 한도 |
+| Codex | `~/.codex/state_5.sqlite` 의 `threads` | 모델 · reasoning effort · 스레드 누적 토큰 |
+| Antigravity · Kimi · Grok | 없음 | `-` |
+
+주의할 점:
+
+- **Claude 값은 Claude Code 를 한 번 띄워야 채워진다.** statusLine 이 그릴 때 캐시가 쓰인다. 1시간 지난 값은 버린다.
+- Codex 의 `43.4M tok` 은 현재 컨텍스트가 아니라 **스레드 누적 토큰**이다. Claude 의 `ctx 29%` 와 다른 의미다.
+- Codex 는 `thread_source='user'` 로 걸러 `codex-auto-review` 같은 서브에이전트 스레드를 제외한다.
+- Antigravity · Kimi · Grok 은 모델·토큰·한도를 로컬 파일에 남기지 않는다. Grok 은 사용량을 OpenTelemetry 로만 내보내고(자체 컬렉터 필요), 세션 중 `/cost` · `/context` 로만 볼 수 있다. 남기기 시작하면 `ai-status` 에 함수 하나 추가하면 된다.
+
+단독 실행:
+
+```sh
+ai-status --once
+```
 
 ### 기록되는 것 / 안 되는 것
 
@@ -157,7 +185,7 @@ Codex · Antigravity · Kimi · Grok 은 각자 자체 상태 표시를 쓴다. 
 ## 제거
 
 ```sh
-rm ~/.local/bin/ai ~/.local/bin/handoff ~/.local/bin/codex-session ~/.local/bin/agy-session ~/.config/zellij/layouts/ai.kdl
+rm ~/.local/bin/ai ~/.local/bin/ai-status ~/.local/bin/claude-statusline ~/.local/bin/handoff ~/.local/bin/codex-session ~/.local/bin/agy-session ~/.config/zellij/layouts/ai.kdl
 ```
 
 `~/.claude/settings.json` 과 `~/.gemini/settings.json` 의 `hooks.SessionEnd` 항목도 지운다. 설치 시 만들어 둔 `.bak` 이 각각 같은 위치에 있다.

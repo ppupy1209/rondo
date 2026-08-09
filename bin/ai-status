@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""zellij 상단 바 — 패널별 모델 · 컨텍스트 · 사용 한도.
+
+각 CLI 가 로컬에 남기는 것만 읽는다. 자격증명으로 API 를 호출하지 않는다.
+
+  claude  statusLine 이 남긴 캐시 (모델 · 컨텍스트% · 5시간/주간 한도)
+  codex   ~/.codex/state_5.sqlite 의 threads (모델 · 누적 토큰)
+  agy·kimi·grok  로컬에 사용량 상태를 남기지 않음 — '-' 로 표시
+
+한 번만 출력하려면 --once.
+"""
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import time
+
+CACHE = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "ai-tools"
+)
+CODEX_DB = os.path.expanduser("~/.codex/state_5.sqlite")
+STALE_SECONDS = 3600
+INTERVAL = 5
+
+
+def repo_root():
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return os.getcwd()
+
+
+def short_model(name):
+    return (name or "-").replace("claude-", "").replace("-latest", "")
+
+
+def tokens(n):
+    if n is None:
+        return None
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    return f"{n / 1000:.0f}k" if n >= 1000 else str(n)
+
+
+def until(epoch):
+    secs = max(0, int(epoch - time.time()))
+    mins, hours = secs // 60 % 60, secs // 3600
+    if hours >= 24:
+        return f"{hours // 24}d{hours % 24}h"
+    return f"{hours}h{mins:02d}m" if hours else f"{mins}m"
+
+
+def claude_field(root):
+    path = os.path.join(CACHE, "claude.%s.json" % os.path.basename(root))
+    try:
+        with open(path) as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    # 다른 레포의 동명 프로젝트이거나 오래된 값이면 쓰지 않는다
+    if d.get("project") != root or time.time() - d.get("at", 0) > STALE_SECONDS:
+        return None
+
+    bits = [short_model(d.get("model"))]
+    if d.get("context_used") is not None:
+        bits.append(f"ctx {d['context_used']:.0f}%")
+    for key, label in (("five_hour", "5h"), ("seven_day", "wk")):
+        window = (d.get("rate_limits") or {}).get(key)
+        if window:
+            bits.append(f"{label} {window['used_percentage']:.0f}%({until(window['resets_at'])})")
+    return " ".join(bits)
+
+
+def codex_field(root):
+    if not os.path.exists(CODEX_DB):
+        return None
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % CODEX_DB, uri=True, timeout=1)
+        row = con.execute(
+            # thread_source='user' 로 서브에이전트(auto-review 등) 스레드를 제외한다
+            "SELECT model, reasoning_effort, tokens_used FROM threads "
+            "WHERE cwd = ? AND thread_source = 'user' "
+            "ORDER BY updated_at_ms DESC LIMIT 1",
+            (root,),
+        ).fetchone()
+        con.close()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    model, effort, used = row
+    bits = [short_model(model)]
+    if effort:
+        bits.append(effort)
+    if tokens(used):
+        # 현재 컨텍스트가 아니라 스레드 누적 토큰이다
+        bits.append(tokens(used) + " tok")
+    return " ".join(bits)
+
+
+def line(root):
+    fields = [
+        ("claude", claude_field(root)),
+        ("codex", codex_field(root)),
+        ("agy", None),
+        ("kimi", None),
+        ("grok", None),
+    ]
+    return "   ".join(f"{name} {value or '-'}" for name, value in fields)
+
+
+def main():
+    root = repo_root()
+    once = "--once" in sys.argv
+    while True:
+        # 커서를 좌상단으로 보내고 줄을 지운 뒤 다시 그린다 (1행 패널용)
+        sys.stdout.write("\033[H\033[2K" + line(root))
+        sys.stdout.flush()
+        if once:
+            print()
+            return
+        time.sleep(INTERVAL)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
