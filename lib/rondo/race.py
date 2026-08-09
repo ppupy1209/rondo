@@ -253,13 +253,14 @@ def orphans(root: Path) -> list[Path]:
     """상태 파일이 가리키지 않는 race worktree. rondo doctor 가 쓴다."""
     current = load(root)
     live = {str(Path(p).resolve()) for p in (current.agents.values() if current else [])}
+    home = race_home(root).resolve()
     found = []
     for line in git(root, "worktree", "list", "--porcelain", check=False).splitlines():
         if not line.startswith("worktree "):
             continue
-        path = str(Path(line.split(" ", 1)[1]).resolve())
-        if f"/race/{repo_key(root)}/" in path and path not in live:
-            found.append(Path(path))
+        path = Path(line.split(" ", 1)[1]).resolve()
+        if path != home and home in path.parents and str(path) not in live:
+            found.append(path)
     return found
 
 
