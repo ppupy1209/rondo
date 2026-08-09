@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
@@ -96,6 +97,8 @@ def session_commands(
 
 
 def run(agent: str, extra: list[str]) -> int:
+    os.environ["RONDO_AGENT"] = agent
+    os.environ.setdefault("RONDO_AGENT_SESSION", uuid.uuid4().hex)
     mode = audience.selected(CONFIG_DIR)
     resume, fresh, compatibility = session_commands(agent, mode)
     prompt = handoff_prompt(agent)

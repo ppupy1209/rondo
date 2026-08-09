@@ -253,6 +253,89 @@ class RondoTests(unittest.TestCase):
         self.assertIn("plan", commands[0])
         self.assertIn("read-only", commands[1])
 
+    def test_same_vendor_tester_never_resumes_implementation_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["test_agent_argv"].__globals__
+        with (
+            patch.dict(scope, {"installed": lambda _name: True}),
+            patch.object(scope["shutil"], "which", return_value="/bin/codex"),
+        ):
+            command = rondo["test_agent_argv"]("codex", "verify independently")
+
+        self.assertEqual(command[0], "/bin/codex")
+        self.assertNotIn("resume", command)
+        self.assertNotIn("--last", command)
+        self.assertEqual(command[-1], "verify independently")
+
+    def test_test_layout_has_only_fresh_verifier_panes(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        from rondo import testing as testing_lib
+
+        run = unittest.mock.Mock(
+            run_id="run123",
+            roles={
+                "red": {"agent": "codex", "worktree": "/tmp/red"},
+                "blue": {"agent": "claude", "worktree": "/tmp/blue"},
+            },
+        )
+        scope = rondo["test_layout"].__globals__
+        with (
+            patch.object(testing_lib, "role_prompt", return_value="verify independently"),
+            patch.object(scope["shutil"], "which", side_effect=lambda name: f"/bin/{name}"),
+        ):
+            layout = rondo["test_layout"](run)
+
+        self.assertEqual(layout.count('name="test-'), 3)  # tab + two verifier panes
+        self.assertIn('tab name="test-run123"', layout)
+        self.assertNotIn("resume", layout)
+        self.assertNotIn("--last", layout)
+
+    def test_test_finish_waits_for_every_independent_report(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        from rondo import testing as testing_lib
+
+        run = unittest.mock.Mock(
+            roles={"red": {"report": str(self.base / "missing.md")}},
+        )
+        with patch.object(testing_lib, "load", return_value=run):
+            with self.assertRaisesRegex(RuntimeError, "missing|보고서"):
+                rondo["test_command"](["finish"])
+
+    def test_test_tab_closes_in_its_owning_zellij_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["_close_test_tab"].__globals__
+        run = unittest.mock.Mock(
+            tab_id="42", zellij_session="rondo-owner", zellij_socket="/tmp/rondo-owner-socket"
+        )
+        listed = subprocess.CompletedProcess([], 0, "rondo-owner\n", "")
+        closed = subprocess.CompletedProcess([], 0, "", "")
+        with (
+            patch.object(scope["subprocess"], "run", side_effect=[listed, closed]) as execute,
+        ):
+            rondo["_close_test_tab"](run)
+
+        self.assertEqual(execute.call_count, 2)
+        execute.assert_any_call(
+            ["zellij", "-s", "rondo-owner", "action", "close-tab", "--tab-id", "42"],
+            capture_output=True,
+            text=True,
+            env=unittest.mock.ANY,
+        )
+        self.assertEqual(execute.call_args_list[0].kwargs["env"]["ZELLIJ_SOCKET_DIR"], "/tmp/rondo-owner-socket")
+
+    def test_test_tab_cleanup_fails_closed_when_session_lookup_fails(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["_close_test_tab"].__globals__
+        run = unittest.mock.Mock(
+            tab_id="42", zellij_session="rondo-owner", zellij_socket="/tmp/rondo-owner-socket"
+        )
+        failed = subprocess.CompletedProcess([], 1, "", "socket unavailable")
+        with patch.object(scope["subprocess"], "run", return_value=failed) as execute:
+            with self.assertRaisesRegex(RuntimeError, "socket unavailable"):
+                rondo["_close_test_tab"](run)
+
+        execute.assert_called_once()
+
     def test_review_policy_creates_a_draft_pr_and_starts_reviews(self):
         rondo = load_script("rondo", self.config, self.cache)
         scope = rondo["pr_command"].__globals__
@@ -521,6 +604,18 @@ class AgentSessionTests(unittest.TestCase):
         ):
             self.assertEqual(self.runner["run"]("codex", []), 0)
         run.assert_called_once_with(["/bin/codex", "resume", "--last"])
+
+    def test_agent_session_exports_implementation_identity(self):
+        scope = self.runner["run"].__globals__
+        done = subprocess.CompletedProcess([], 0)
+        with (
+            patch.dict(scope["os"].environ, {}, clear=True),
+            patch.object(scope["shutil"], "which", side_effect=lambda name: f"/bin/{name}" if name == "codex" else None),
+            patch.object(scope["subprocess"], "run", return_value=done),
+        ):
+            self.assertEqual(self.runner["run"]("codex", []), 0)
+            self.assertEqual(scope["os"].environ["RONDO_AGENT"], "codex")
+            self.assertEqual(len(scope["os"].environ["RONDO_AGENT_SESSION"]), 32)
 
     def test_audience_guidance_uses_each_cli_native_entry_point(self):
         commands = self.runner["session_commands"]

@@ -16,6 +16,7 @@ It provides:
 - visible prompts between agent panes through `rondo send`;
 - element-scoped frontend requests through Rondo Lens;
 - executable evidence and a risk-based human review queue through Rondo Proof;
+- red-team, blue-team, reliability, and security tests physically separated from implementation sessions;
 - opt-in Claude → Codex continuity at the usage limit.
 
 Rondo is local-first. It reads the files that each installed CLI already stores on your machine and does not add a hosted service, account, or API key.
@@ -65,6 +66,7 @@ rondo add         # select and add another agent pane
 rondo send codex "Review the current diff"  # type and submit in the Codex pane
 rondo lens        # click a UI element and send its focused context
 rondo proof       # run checks and build a risk-based review packet
+rondo test all --from codex --tester claude  # test outside the implementation session
 rondo git         # inspect Git connection, branch, PR policy, and reviewers
 rondo doctor      # diagnose dependencies and configuration
 ```
@@ -165,6 +167,52 @@ The independent reviewer starts in a fresh pane without the implementer's conver
 
 Task intent and proof packets stay under `~/.cache/rondo/proof/` with mode `0600` and are not committed. Check output can contain project data, so inspect a packet before sharing it outside the machine.
 
+## Independent tests separated from implementation
+
+Rondo's testing rule cannot be disabled or weakened through configuration.
+
+> The agent session used for implementation is never used for testing. Selecting the same agent vendor still starts a fresh session without resuming the implementation conversation.
+
+Both examples are valid after Codex implements a change:
+
+```sh
+rondo test all --from codex --tester claude  # Codex implementation → fresh Claude verification
+rondo test all --from codex --tester codex   # Codex implementation → fresh Codex verification
+```
+
+When invoked inside an agent pane, Rondo records the implementer and implementation session automatically. From the shell tab, declare it with `--from codex`. Omitting `--tester` opens the selector; multiple testers are assigned to roles in round-robin order.
+
+`all` stays within the four-pane limit by creating four isolated sessions that share no conversation:
+
+| Role | Coverage |
+|---|---|
+| `red` | hostile inputs, boundaries, authorization bypasses, strongest counterexamples |
+| `blue` | expected flows, regressions, controls, recovery, and observability |
+| `reliability` | load, concurrency, races/deadlocks, idempotency, transactions, rollback, and isolation |
+| `audit` | security, dependencies, secrets, permissions, injection, and actual-diff code review |
+
+Run a narrower profile with commands such as `rondo test security`, `rondo test concurrency`, `rondo test transaction`, or `rondo test review`. Every verifier starts in a separate Git worktree containing the current changes. Temporary tests belong under `.rondo-test/`; product source must not be edited. `rondo test finish` records any source edit as a verification violation and never applies it to the original working tree.
+
+```sh
+rondo test status    # show report progress per role
+rondo test finish    # after all reports: collect, flag violations, and remove the tab/worktrees
+rondo test abort     # stop the run and remove isolated worktrees
+```
+
+### k6, Prometheus, and Grafana load tests
+
+With Docker and Docker Compose available, Rondo starts an ephemeral k6, Prometheus, Grafana, and Grafana Image Renderer stack. After the run it saves a dashboard PNG and k6 results in the evidence packet.
+
+```sh
+rondo test load --from codex --tester claude \
+  --url http://localhost:8080/api/health --vus 20 --duration 30s
+
+rondo test reliability --from claude --tester codex \
+  --script tests/load.js --duration 2m --allow-remote
+```
+
+The generated script sends GET requests only and does not follow redirects. VUs are limited to 1–1000 and duration to at most 60 minutes. Only localhost is allowed by default; pass `--allow-remote` only after receiving permission from the target system. Because Rondo cannot reliably determine the targets selected by custom code, a repository-local k6 script runs only with the explicit `--script ... --allow-remote` combination after you inspect it. Usage reporting and update checks are disabled for the observability tools. Grafana graphs, summary JSON, logs, and independent agent reports stay private under `~/.cache/rondo/test/`. The version-pinned stack and its volumes are removed after capture.
+
 ## Git, PRs, and agent code review
 
 Git policy is stored in the current repository's `.git/config`, not as a global preference, so every project can use a different workflow.
@@ -227,8 +275,9 @@ The target pane receives a visible prompt pointing to `.rondo/handoff.md`. The f
 4. `rondo send` targets a pane by its Rondo name and submits a visible prompt through zellij.
 5. `rondo lens` captures one selected UI element into a private local packet and sends it only after confirmation.
 6. `rondo proof` runs discovered checks, classifies risk, and keeps only unresolved decisions in the human review queue.
-7. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
-8. At Claude's usage threshold, the continuity relay prepares a local packet and can send it to the existing Codex pane.
+7. `rondo test` freezes the current working tree without changing its commit or index, then starts role-specific verification in separate worktrees and sessions that never reuse the implementation conversation.
+8. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
+9. At Claude's usage threshold, the continuity relay prepares a local packet and can send it to the existing Codex pane.
 
 The agents do not share a vendor chat session. They share the real project directory, Git state, a persistent terminal workspace, and a small provider-neutral continuity packet.
 
@@ -280,6 +329,7 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo review [--budget 2m]` | Show the highest-risk human decisions within a time budget |
 | `rondo git [command]` | Manage Git connection and repository-local PR/reviewer policy |
 | `rondo code-review [agent\|all]` | Run independent read-only reviews by selected agents |
+| `rondo test [profile] [options]` | Run red, blue, reliability, and security tests outside the implementation session |
 | `rondo pr [title]` | Push the feature branch and create a policy-aware PR |
 | `rondo handoff [note]` | Create `.rondo/handoff.md` for another computer |
 | `rondo resume [claude\|codex]` | Open the workspace and deliver the handoff to one agent |
@@ -316,6 +366,7 @@ The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/
   claude.*       local display cache
   lens/          private element context packets and cropped screenshots
   proof/         private task intent, evidence packets, and review queues
+  test/          isolated test state, reports, k6 results, and Grafana captures
   relay/         private continuity packets and delivery logs
 ```
 

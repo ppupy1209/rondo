@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 import sys
+import uuid
 from pathlib import Path
 
 if os.name == "nt":
@@ -25,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -63,6 +64,8 @@ TEXT = {
   rondo git [명령]      Git 연결·PR 정책·reviewer 설정
   rondo code-review [에이전트|all]
                         각 에이전트의 독립 읽기 전용 코드 리뷰
+  rondo test [프로필] [--from 구현자] [--tester 검증자]
+                        새 격리 세션에서 레드·블루·신뢰성·보안 검증
   rondo pr [제목]       현재 브랜치를 push하고 정책에 맞는 PR 생성
   rondo review [--budget 2m]
                         제한 시간 안에 볼 항목만 표시
@@ -207,6 +210,21 @@ TEXT = {
         "git_reviewers_saved": "리뷰 에이전트: {reviewers}",
         "review_agent_usage": "사용법: rondo code-review [claude|codex|gemini|kimi|grok|all]",
         "review_agent_started": "독립 코드 리뷰를 시작했습니다: {reviewers}",
+        "test_usage": "사용법: rondo test [all|red|blue|reliability|audit|load|security|concurrency|transaction|review] [--from agent|human] [--tester agent,...] [--url URL] [--script 경로] [--vus 10] [--duration 30s] [--allow-remote]",
+        "test_tester_title": "독립 테스트를 맡을 에이전트를 선택하세요",
+        "test_implementer_title": "이 변경을 구현한 주체를 선택하세요",
+        "test_started": "독립 테스트 {run} 시작 · 구현 세션과 분리된 새 세션 {count}개",
+        "test_role": "{profile}: {agent} · 세션 {session}",
+        "test_rule": "고정 원칙: 구현 세션은 테스트에 사용되지 않으며 이 규칙은 설정으로 바꿀 수 없습니다.",
+        "test_none": "진행 중인 독립 테스트가 없습니다.",
+        "test_status": "독립 테스트 {run} · 구현자 {implementer}",
+        "test_report_ready": "완료",
+        "test_report_pending": "진행 중",
+        "test_finish_pending": "아직 보고서가 없는 역할: {profiles}. 완료될 때까지 `rondo test status`로 확인하세요.",
+        "test_finished": "독립 테스트 증거 패킷: {path}",
+        "test_aborted": "독립 테스트를 중단하고 격리 worktree를 정리했습니다.",
+        "test_load": "부하 테스트 {status} · Grafana 그래프: {graph}",
+        "test_need_session": "독립 에이전트 테스트는 Rondo 세션 안에서 실행하세요.",
         "pr_dirty": "커밋하지 않은 변경이 있습니다. 먼저 커밋한 뒤 PR을 만드세요.",
         "pr_default_branch": "기본 브랜치 {branch}에서는 PR을 만들 수 없습니다. 기능 브랜치로 전환하세요.",
         "pr_review_hint": "PR을 만들었습니다. Rondo 세션에서 `rondo code-review all`로 리뷰를 시작하세요.",
@@ -228,6 +246,8 @@ TEXT = {
   rondo git [command]   Connect Git and configure PR/reviewer policy
   rondo code-review [agent|all]
                         Open independent read-only agent reviews
+  rondo test [profile] [--from implementer] [--tester verifier]
+                        Run red, blue, reliability, and security tests in fresh sessions
   rondo pr [title]      Push this branch and create a policy-aware PR
   rondo review [--budget 2m]
                         Show only what fits the review budget
@@ -367,6 +387,21 @@ Inside a session
         "git_reviewers_saved": "Review agents: {reviewers}",
         "review_agent_usage": "Usage: rondo code-review [claude|codex|gemini|kimi|grok|all]",
         "review_agent_started": "Started independent code reviews: {reviewers}",
+        "test_usage": "Usage: rondo test [all|red|blue|reliability|audit|load|security|concurrency|transaction|review] [--from agent|human] [--tester agent,...] [--url URL] [--script path] [--vus 10] [--duration 30s] [--allow-remote]",
+        "test_tester_title": "Choose independent test agents",
+        "test_implementer_title": "Who implemented this change?",
+        "test_started": "Independent test {run} started · {count} fresh session(s) separated from implementation",
+        "test_role": "{profile}: {agent} · session {session}",
+        "test_rule": "Fixed rule: the implementation session is never used for testing and this cannot be configured away.",
+        "test_none": "No independent test run is active.",
+        "test_status": "Independent test {run} · implementer {implementer}",
+        "test_report_ready": "complete",
+        "test_report_pending": "in progress",
+        "test_finish_pending": "Reports are still missing for: {profiles}. Check with `rondo test status` until they finish.",
+        "test_finished": "Independent test evidence packet: {path}",
+        "test_aborted": "Aborted the independent test and cleaned its isolated worktrees.",
+        "test_load": "Load test {status} · Grafana graph: {graph}",
+        "test_need_session": "Run independent agent tests inside a Rondo session.",
         "pr_dirty": "Commit the current changes before creating a PR.",
         "pr_default_branch": "A PR cannot be created from the default branch {branch}. Switch to a feature branch.",
         "pr_review_hint": "PR created. Run `rondo code-review all` inside Rondo to start reviews.",
@@ -1356,6 +1391,223 @@ def code_review_command(args: list[str]) -> int:
     return 0
 
 
+def test_agent_argv(name: str, prompt: str) -> list[str]:
+    binary = shutil.which(AGENTS[name][1]) or AGENTS[name][1]
+    permissions = approval_lib.arguments(name, approval_lib.selected(CONFIG_DIR))
+    prompt_flags = ["--prompt-interactive"] if name == "gemini" else []
+    command = [binary, *permissions, *prompt_flags, prompt]
+    if WINDOWS and Path(binary).suffix.lower() in (".cmd", ".bat"):
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *command]
+    return command
+
+
+def _testers(values: list[str]) -> list[str]:
+    names = list(dict.fromkeys(
+        name for value in values for name in value.replace(",", " ").split()
+    ))
+    if not names:
+        defaults = set(git_reviewers(repo_root()) or configured_panels())
+        names = choose_agents(defaults, t("test_tester_title"))
+    if (
+        not names
+        or len(names) > MAX_PANELS
+        or any(name not in AGENTS or not installed(name) for name in names)
+    ):
+        raise RuntimeError(t("test_usage"))
+    return names
+
+
+def _test_implementer(value: str | None) -> str:
+    implementer = value or os.environ.get("RONDO_AGENT")
+    if implementer:
+        if implementer not in (*AGENTS, "human"):
+            raise RuntimeError(t("test_usage"))
+        return implementer
+    return choose_one(
+        t("test_implementer_title"),
+        [("human", "human"), *[(name, AGENTS[name][2]) for name in AGENTS]],
+    )
+
+
+def test_layout(run) -> str:
+    from rondo import testing as testing_lib
+
+    panes = []
+    for profile, role in run.roles.items():
+        prompt = testing_lib.role_prompt(run, profile, LANGUAGE)
+        command = test_agent_argv(role["agent"], prompt)
+        panes.append((profile, role, command))
+
+    def pane_lines(item, indent: str) -> list[str]:
+        profile, role, command = item
+        values = [
+            indent + "pane "
+            f"name={json.dumps('test-' + profile + '-' + role['agent'])} "
+            f"cwd={json.dumps(role['worktree'])} command={json.dumps(command[0])} {{"
+        ]
+        if len(command) > 1:
+            values.append(indent + "    args " + " ".join(json.dumps(arg) for arg in command[1:]))
+        values.append(indent + "}")
+        return values
+
+    lines = [
+        "layout {",
+        f"    tab name={json.dumps('test-' + run.run_id)} focus=true split_direction=\"vertical\" {{",
+    ]
+    midpoint = (len(panes) + 1) // 2
+    groups = [panes[:midpoint], panes[midpoint:]] if len(panes) > 1 else [panes]
+    for group in groups:
+        if not group:
+            continue
+        if len(group) == 1:
+            lines += pane_lines(group[0], "        ")
+            continue
+        lines.append('        pane split_direction="horizontal" {')
+        for item in group:
+            lines += pane_lines(item, "            ")
+        lines.append("        }")
+    lines += ["    }", "}"]
+    return "\n".join(lines)
+
+
+def _launch_test_sessions(run) -> str:
+    result = subprocess.run(
+        ["zellij", "action", "new-tab", "--layout-string", test_layout(run)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _close_test_tab(run) -> None:
+    if not run.tab_id:
+        return
+    owner = getattr(run, "zellij_session", "")
+    environment = os.environ.copy()
+    owner_socket = getattr(run, "zellij_socket", "")
+    if owner_socket:
+        environment["ZELLIJ_SOCKET_DIR"] = owner_socket
+    listing = subprocess.run(
+        ["zellij", "list-sessions", "-n"],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    if listing.returncode:
+        raise RuntimeError(listing.stderr.strip() or listing.stdout.strip() or t("pane_lookup_failed"))
+    active, _exited = parse_session_list(listing.stdout)
+    if owner and owner not in active:
+        return
+    if not owner and not os.environ.get("ZELLIJ_SESSION_NAME"):
+        raise RuntimeError(t("test_need_session"))
+    command = ["zellij"]
+    if owner:
+        command += ["-s", owner]
+    done = subprocess.run(
+        [*command, "action", "close-tab", "--tab-id", run.tab_id],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    if done.returncode:
+        raise RuntimeError(done.stderr.strip() or done.stdout.strip() or t("test_need_session"))
+
+
+def test_command(args: list[str]) -> int:
+    from rondo import testing as testing_lib
+
+    root = repo_root()
+    if args and args[0] in {"status", "finish", "abort"}:
+        if len(args) != 1:
+            raise RuntimeError(t("test_usage"))
+        run = testing_lib.load(root)
+        if not run:
+            print(t("test_none"))
+            return 0
+        if args[0] == "abort":
+            _close_test_tab(run)
+            testing_lib.abort(run)
+            print(t("test_aborted"))
+            return 0
+        if args[0] == "finish":
+            pending = [
+                profile for profile, role in run.roles.items()
+                if not testing_lib.report_complete(role["report"])
+            ]
+            if pending:
+                raise RuntimeError(t("test_finish_pending", profiles=", ".join(pending)))
+            _close_test_tab(run)
+            result = testing_lib.finish(run)
+            print(t("test_finished", path=result["summary"]))
+            failed = any(not item["report"] or item["violations"] for item in result["results"])
+            failed = failed or bool(run.load and run.load.get("status") != "passed")
+            return int(failed)
+        print(t("test_status", run=run.run_id, implementer=run.implementer))
+        for profile, role in run.roles.items():
+            state = (
+                t("test_report_ready")
+                if testing_lib.report_complete(role["report"])
+                else t("test_report_pending")
+            )
+            print(f"  {profile}: {role['agent']} · {state}")
+        if run.load:
+            print("  " + t("test_load", status=run.load.get("status"), graph=run.load.get("graph") or "-"))
+        return 0
+
+    if not os.environ.get("ZELLIJ_SESSION_NAME"):
+        raise RuntimeError(t("test_need_session"))
+    require_git_repo(root)
+    try:
+        profiles, values, switches = _command_options(
+            args,
+            {"--from", "--tester", "--url", "--script", "--vus", "--duration"},
+            {"--allow-remote"},
+        )
+        profiles = testing_lib.expand_profiles(profiles)
+        implementer = _test_implementer(values["--from"][-1] if values["--from"] else None)
+        testers = _testers(values["--tester"])
+        vus = int(values["--vus"][-1]) if values["--vus"] else 10
+        duration = values["--duration"][-1] if values["--duration"] else "30s"
+        url = values["--url"][-1] if values["--url"] else None
+        script = values["--script"][-1] if values["--script"] else None
+        testing_lib.validate_load_options(vus, duration)
+        if "load" in profiles and not (url or script):
+            raise ValueError("load requires a target")
+        if url and not testing_lib.allowed_load_url(url, "--allow-remote" in switches):
+            raise ValueError("remote load target blocked")
+        if script and "--allow-remote" not in switches:
+            raise ValueError("custom script target cannot be verified")
+    except (ValueError, testing_lib.TestError):
+        raise RuntimeError(t("test_usage")) from None
+
+    implementer_session = os.environ.get("RONDO_AGENT_SESSION") or f"declared-{implementer}-{uuid.uuid4().hex}"
+    run = testing_lib.start(root, profiles, implementer, implementer_session, testers)
+    run.zellij_session = os.environ["ZELLIJ_SESSION_NAME"]
+    run.zellij_socket = os.environ.get("ZELLIJ_SOCKET_DIR", "")
+    testing_lib.save(run)
+    try:
+        if url or script:
+            result = testing_lib.run_load(
+                run, url, script, vus, duration, "--allow-remote" in switches
+            )
+            print(t("test_load", status=result["status"], graph=result.get("graph") or "-"))
+        run.tab_id = _launch_test_sessions(run)
+        testing_lib.save(run)
+    except Exception:
+        _close_test_tab(run)
+        testing_lib.abort(run)
+        raise
+
+    print(t("test_started", run=run.run_id, count=len(run.roles)))
+    print(t("test_rule"))
+    for profile, role in run.roles.items():
+        print("  " + t(
+            "test_role", profile=profile, agent=role["agent"], session=role["session"][:8]
+        ))
+    return 0
+
+
 def pr_command(args: list[str]) -> int:
     root = repo_root()
     require_git_repo(root)
@@ -1408,6 +1660,7 @@ def doctor(deep: bool = False) -> int:
         ("zellij", "zellij", True),
         ("git", "git", False),
         ("gh", "gh", False),
+        ("docker", "docker", False),
     ]
     optional = [(name, False) for name in AGENTS]
     failed = False
@@ -1739,6 +1992,8 @@ def main() -> int:
         return git_command(args[1:])
     elif command == "code-review":
         return code_review_command(args[1:])
+    elif command == "test":
+        return test_command(args[1:])
     elif command == "pr":
         return pr_command(args[1:])
     elif command == "lens":

@@ -16,6 +16,7 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 - `rondo send`를 통한 화면에 보이는 에이전트 간 요청
 - Rondo Lens를 통한 화면 요소 단위 프론트엔드 요청
 - Rondo Proof를 통한 실행 가능한 증거와 위험 기반 사람 검토 큐
+- 구현 세션과 물리적으로 분리되는 레드팀·블루팀·신뢰성·보안 테스트
 - 사용량 한도에서 동작하는 선택형 Claude → Codex 연속 작업
 
 별도 서버·계정·API 키가 필요 없는 로컬 우선 도구입니다. 각 CLI가 이미 내 컴퓨터에 저장한 상태만 읽습니다.
@@ -65,6 +66,7 @@ rondo add         # 에이전트를 선택해 패널 추가
 rondo send codex "현재 diff를 검토해 주세요"  # Codex 패널에 입력하고 전송
 rondo lens        # 화면 요소를 클릭해 해당 맥락만 전달
 rondo proof       # 검증 실행 후 위험 기반 검토 패킷 생성
+rondo test all --from codex --tester claude  # 구현자와 분리된 독립 테스트
 rondo git         # Git 연결·브랜치·PR 정책·리뷰어 확인
 rondo doctor      # 설치와 설정 진단
 ```
@@ -165,6 +167,52 @@ Rondo는 변경 파일을 낮음·중간·높음으로 분류합니다. 인증, 
 
 작업 의도와 Proof 패킷은 `~/.cache/rondo/proof/`에 권한 `0600`으로 저장되며 Git에 포함되지 않습니다. 검증 출력에는 프로젝트 데이터가 포함될 수 있으므로 패킷을 외부에 공유하기 전에는 내용을 확인하세요.
 
+## 구현자와 분리된 독립 테스트
+
+Rondo의 테스트 원칙은 설정으로 끄거나 완화할 수 없습니다.
+
+> 구현에 사용한 에이전트 세션은 테스트에 사용하지 않습니다. 같은 종류의 에이전트를 선택해도 기존 대화를 재개하지 않고 새 세션에서 검증합니다.
+
+예를 들어 Codex가 구현했다면 다음 두 방식이 모두 가능합니다.
+
+```sh
+rondo test all --from codex --tester claude  # Codex 구현 → 새 Claude 세션 검증
+rondo test all --from codex --tester codex   # Codex 구현 → 새 Codex 세션 검증
+```
+
+에이전트 패널 안에서 실행하면 구현자와 구현 세션 ID를 자동으로 기록합니다. shell 탭에서 실행할 때는 `--from codex`처럼 구현자를 지정합니다. `--tester`를 생략하면 선택 화면이 열리며 여러 에이전트를 고르면 역할별로 순환 배정됩니다.
+
+`all`은 최대 4개 패널 원칙에 맞춰 서로 대화를 공유하지 않는 네 개의 격리 세션을 만듭니다.
+
+| 역할 | 검증 범위 |
+|---|---|
+| `red` | 악의적 입력, 경계값, 권한 우회, 가장 강한 반례 |
+| `blue` | 정상 흐름, 회귀, 방어 통제, 복구와 관측 가능성 |
+| `reliability` | 부하, 동시성, race/deadlock, 멱등성, 트랜잭션·롤백·격리 |
+| `audit` | 보안, 의존성, 비밀값, 권한, injection, 실제 diff 코드 리뷰 |
+
+필요한 범위만 `rondo test security`, `rondo test concurrency`, `rondo test transaction`, `rondo test review`처럼 실행할 수도 있습니다. 모든 검증자는 현재 변경분을 담은 별도 Git worktree에서 시작합니다. 임시 테스트 코드는 `.rondo-test/`에만 작성하고 제품 코드는 수정하지 않도록 지시됩니다. `rondo test finish` 때 제품 코드 변경이 발견되면 검증 위반으로 기록되며 원본 작업 트리에는 반영되지 않습니다.
+
+```sh
+rondo test status    # 역할별 보고서 작성 상태
+rondo test finish    # 모든 보고서 완료 후 수집·위반 확인·테스트 탭/worktree 정리
+rondo test abort     # 테스트 중단과 격리 worktree 정리
+```
+
+### k6·Prometheus·Grafana 부하 테스트
+
+Docker와 Docker Compose가 있으면 Rondo가 일회용 k6·Prometheus·Grafana·Grafana Image Renderer 스택을 열고, 테스트가 끝난 뒤 대시보드 PNG와 k6 결과를 증거 패킷에 남깁니다.
+
+```sh
+rondo test load --from codex --tester claude \
+  --url http://localhost:8080/api/health --vus 20 --duration 30s
+
+rondo test reliability --from claude --tester codex \
+  --script tests/load.js --duration 2m --allow-remote
+```
+
+기본 생성 스크립트는 GET 요청만 보내고 redirect를 따라가지 않으며 VU는 1~1000, 실행 시간은 최대 60분으로 제한됩니다. localhost만 기본 허용되고 원격 주소는 대상 시스템의 허가를 받은 뒤 `--allow-remote`를 명시해야 합니다. 저장소 안의 자체 k6 스크립트는 대상 주소를 Rondo가 확실히 판별할 수 없으므로, 내용을 직접 확인한 뒤 `--script ... --allow-remote`로만 실행할 수 있습니다. 관측 도구의 사용량 전송과 업데이트 확인은 꺼져 있습니다. Grafana 그래프, summary JSON, 실행 로그와 독립 에이전트 보고서는 `~/.cache/rondo/test/`에 비공개로 보관됩니다. 버전을 고정한 스택은 캡처 후 자동으로 종료되고 볼륨도 제거됩니다.
+
 ## Git·PR·에이전트 코드 리뷰
 
 Git 정책은 전역 설정이 아니라 현재 저장소의 `.git/config`에 저장되므로 프로젝트마다 다르게 유지됩니다.
@@ -227,8 +275,9 @@ rondo resume codex       # 또는: rondo resume claude
 4. `rondo send`가 Rondo 패널 이름으로 대상을 찾아 zellij를 통해 보이는 요청을 전달합니다.
 5. `rondo lens`가 선택한 화면 요소 하나를 비공개 로컬 패킷으로 만들고 확인 후에만 전달합니다.
 6. `rondo proof`가 자동으로 검증을 실행하고 위험도를 분류해, 해결되지 않은 판단만 사람 검토 큐에 남깁니다.
-7. 지원되는 종료 훅과 래퍼가 세션 종료 후 선택적인 Git 핸드오프 로그를 갱신합니다.
-8. Claude 사용량이 임계치에 닿으면 로컬 인계 패킷을 준비하고 기존 Codex 패널로 전달할 수 있습니다.
+7. `rondo test`가 현재 작업 트리를 커밋이나 인덱스 변경 없이 스냅샷으로 고정하고, 구현 대화를 재사용하지 않는 별도 worktree·세션에서 역할별 검증을 시작합니다.
+8. 지원되는 종료 훅과 래퍼가 세션 종료 후 선택적인 Git 핸드오프 로그를 갱신합니다.
+9. Claude 사용량이 임계치에 닿으면 로컬 인계 패킷을 준비하고 기존 Codex 패널로 전달할 수 있습니다.
 
 벤더의 채팅 세션 자체를 합치는 방식은 아닙니다. 대신 실제 프로젝트 디렉터리, Git 상태, 영속적인 터미널, 작은 벤더 중립 인계 패킷을 공유합니다.
 
@@ -280,6 +329,7 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo review [--budget 2m]` | 시간 예산 안에서 고위험 사람 판단부터 표시 |
 | `rondo git [명령]` | Git 연결 상태와 저장소별 PR·reviewer 정책 관리 |
 | `rondo code-review [agent\|all]` | 에이전트별 독립 읽기 전용 코드 리뷰 실행 |
+| `rondo test [프로필] [옵션]` | 구현 세션과 분리된 레드·블루·신뢰성·보안 테스트 실행 |
 | `rondo pr [제목]` | 현재 기능 브랜치를 push하고 정책에 맞는 PR 생성 |
 | `rondo handoff [메모]` | 다른 PC로 옮길 `.rondo/handoff.md` 생성 |
 | `rondo resume [claude\|codex]` | 작업공간을 열고 선택한 에이전트에 인계 전달 |
@@ -316,6 +366,7 @@ zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 �
   claude.*       로컬 표시 캐시
   lens/          비공개 요소 맥락 파일과 부분 스크린샷
   proof/         비공개 작업 의도, 증거 패킷, 검토 큐
+  test/          독립 테스트 worktree 상태, 보고서, k6 결과와 Grafana 캡처
   relay/         비공개 인계 패킷과 전달 로그
 ```
 
