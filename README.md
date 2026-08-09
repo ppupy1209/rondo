@@ -1,10 +1,10 @@
 # ai-tools
 
-Claude Code · Codex · Gemini 를 프로젝트 단위로 함께 쓰기 위한 개인 도구.
+Claude Code · Codex · Antigravity · Kimi · Grok 를 프로젝트 단위로 함께 쓰기 위한 개인 도구.
 
 - **`ai`** — 프로젝트마다 zellij 세션 하나. 한 화면에 AI 3개, 껐다 켜도 유지
 - **`handoff`** — 세션이 끝나면 그동안의 커밋을 레포의 핸드오프 문서에 기록
-- **`codex-session`** — `ai` 가 codex 패널에서 쓰는 래퍼. 직접 칠 일은 없다
+- **`codex-session` · `agy-session`** — `ai` 가 패널에서 쓰는 래퍼. 직접 칠 일은 없다
 
 ## 설치
 
@@ -26,19 +26,46 @@ git -C ~/ai-tools pull
 ## `ai` — 프로젝트별 AI 세션
 
 ```sh
-ai            # 현재 레포 이름으로 세션 열기 / 붙기
-ai 실험용      # 이름 직접 지정
-ai -l         # 열려 있는 세션 목록
+ai              # 현재 레포 이름으로 세션 열기 / 붙기
+ai 실험용        # 이름 직접 지정
+ai add kimi     # 현재 세션에 AI 패널 추가
+ai -l           # 열려 있는 세션 목록
 ```
 
 ```
 ┌──────────────────┬──────────────────┐
 │                  │      codex       │
 │      claude      ├──────────────────┤
-│                  │      gemini      │
+│                  │   antigravity    │
 └──────────────────┴──────────────────┘
    탭: ai | shell
 ```
+
+### 패널 추가 · 삭제
+
+```sh
+ai add <claude|codex|antigravity|gemini|kimi|grok>
+```
+
+zellij 세션 안에서 실행한다(보통 `shell` 탭). 종료 후 `handoff` 까지 자동으로 이어 붙는다. 설치 안 된 CLI 는 실행 전에 걸러낸다.
+
+삭제는 zellij 기본 키다. 따로 명령이 없다.
+
+- `Ctrl+p` 다음 `x` — 현재 패널 닫기
+- `Ctrl+p` 다음 `n` — 빈 패널 열기
+
+### 지원 CLI
+
+| 에이전트 | 명령 | 기본 레이아웃 | 설치 |
+|---|---|---|---|
+| Claude Code | `claude` | ✓ | 설치됨 |
+| Codex CLI | `codex` | ✓ | 설치됨 |
+| Antigravity CLI | `agy` | ✓ | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
+| Gemini CLI | `gemini` | | 설치됨 (Antigravity 로 대체됨) |
+| Kimi Code CLI | `kimi` | | `npm install -g @kimi-code/cli` |
+| Grok Build | `grok` | | `curl -fsSL https://x.ai/cli/install.sh \| bash` |
+
+대상을 늘리려면 `bin/ai` 의 `agent_cmd()` 에 한 줄 추가하면 된다.
 
 레포 하위 디렉터리에서 실행해도 **레포 루트 이름**으로 잡힌다. 레포가 아니면 현재 디렉터리 이름을 쓴다.
 
@@ -84,11 +111,15 @@ handoff --init
 |---|---|---|
 | Claude Code | `~/.claude/settings.json` 의 `SessionEnd` 훅 | 세션 종료 |
 | Gemini CLI | `~/.gemini/settings.json` 의 `SessionEnd` 훅 (Claude 와 같은 스키마) | 세션 종료 |
-| Codex CLI | `codex-session` 래퍼 (zellij 레이아웃이 실행) | codex 종료 직후 |
+| Codex CLI | `codex-session` 래퍼 | codex 종료 직후 |
+| Antigravity CLI | `agy-session` 래퍼 | agy 종료 직후 |
+| Kimi · Grok | `ai add` 가 붙이는 래퍼 | CLI 종료 직후 |
 
-Codex 만 래퍼인 이유: Codex 훅 이벤트에 **세션 종료가 없다**. `pre_tool_use` · `post_tool_use` · `session_start` · `user_prompt_submit` · `subagent_start` · `subagent_stop` · `pre_compact` · `post_compact` · `permission_request` 뿐이다. `notify` 키가 있지만 Computer Use 가 이미 쓰고 있어 건드리지 않는다.
+Claude · Gemini 는 진짜 `SessionEnd` 훅이 있다. 나머지는 없거나 확인되지 않아 실행을 감싼다.
 
-그래서 Codex 는 `ai` 로 띄운 세션에서만 자동 기록된다. `codex` 를 직접 실행했다면 끝나고 한 번:
+Codex 에 훅을 못 다는 이유: 훅 이벤트 목록에 **세션 종료가 없다**. `pre_tool_use` · `post_tool_use` · `session_start` · `user_prompt_submit` · `subagent_start` · `subagent_stop` · `pre_compact` · `post_compact` · `permission_request` 뿐이다. `notify` 키가 있지만 Computer Use 가 이미 쓰고 있어 건드리지 않는다.
+
+래퍼 방식은 `ai` 로 띄운 세션에서만 돈다. CLI 를 직접 실행했다면 끝나고 한 번:
 
 ```sh
 handoff Codex
@@ -103,7 +134,7 @@ handoff Codex
 ## 제거
 
 ```sh
-rm ~/.local/bin/ai ~/.local/bin/handoff ~/.local/bin/codex-session ~/.config/zellij/layouts/ai.kdl
+rm ~/.local/bin/ai ~/.local/bin/handoff ~/.local/bin/codex-session ~/.local/bin/agy-session ~/.config/zellij/layouts/ai.kdl
 ```
 
 `~/.claude/settings.json` 과 `~/.gemini/settings.json` 의 `hooks.SessionEnd` 항목도 지운다. 설치 시 만들어 둔 `.bak` 이 각각 같은 위치에 있다.

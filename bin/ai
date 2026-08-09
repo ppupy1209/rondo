@@ -1,12 +1,40 @@
 #!/bin/sh
 # 프로젝트별 AI 세션. 레포 루트 이름으로 zellij 세션을 만들고, 이미 있으면 붙는다.
-#   ai          현재 레포의 세션 열기 / 붙기
-#   ai <이름>   이름을 직접 지정
-#   ai -l       열려 있는 세션 목록
+#   ai                  현재 레포의 세션 열기 / 붙기
+#   ai <이름>            이름을 직접 지정
+#   ai add <에이전트>     현재 세션에 AI 패널 추가
+#   ai -l               열려 있는 세션 목록
+# 패널 닫기는 zellij 기본 키: Ctrl+p 다음 x
 set -eu
 
+# 에이전트 이름 -> "실행명령 기록이름". 여기만 고치면 add 대상이 늘어난다.
+agent_cmd() {
+    case "$1" in
+        claude)             echo "claude Claude" ;;
+        codex)              echo "codex Codex" ;;
+        antigravity|agy)    echo "agy Antigravity" ;;
+        gemini)             echo "gemini Gemini" ;;
+        kimi)               echo "kimi Kimi" ;;
+        grok)               echo "grok Grok" ;;
+        *)                  return 1 ;;
+    esac
+}
+
 case "${1:-}" in
-    -l|--list) exec zellij list-sessions ;;
+    -l|--list)
+        exec zellij list-sessions
+        ;;
+    add)
+        name="${2:-}"
+        [ -n "$name" ] || { echo "사용법: ai add <claude|codex|antigravity|gemini|kimi|grok>" >&2; exit 1; }
+        spec=$(agent_cmd "$name") || { echo "모르는 에이전트: $name" >&2; exit 1; }
+        cmd=${spec% *}
+        label=${spec#* }
+        command -v "$cmd" >/dev/null 2>&1 || { echo "$cmd 미설치 — README 설치 안내 참고" >&2; exit 1; }
+        [ -n "${ZELLIJ:-}" ] || { echo "zellij 세션 안에서 실행할 것 ('ai' 로 세션 먼저 열기)" >&2; exit 1; }
+        # 종료 후 handoff 까지 실행. 세션 종료 훅이 있는 CLI 도 한 번 더 도는 것은 무해하다(멱등).
+        exec zellij action new-pane --name "$name" -- sh -c "$cmd; handoff $label"
+        ;;
 esac
 
 root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)

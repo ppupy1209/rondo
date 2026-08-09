@@ -3,9 +3,9 @@ layout {
         pane split_direction="vertical" {
             pane name="claude" command="claude" size="50%"
             pane split_direction="horizontal" {
-                // codex-session = codex 실행 후 handoff (Codex 는 세션 종료 훅이 없음)
+                // *-session = CLI 실행 후 handoff (세션 종료 훅이 없는 CLI)
                 pane name="codex" command="codex-session"
-                pane name="gemini" command="gemini"
+                pane name="antigravity" command="agy-session"
             }
         }
     }
