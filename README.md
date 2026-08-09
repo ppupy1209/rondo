@@ -4,7 +4,7 @@ Claude Code · Codex · Antigravity · Kimi · Grok 를 프로젝트 단위로 �
 
 - **`ai`** — 프로젝트마다 zellij 세션 하나. 한 화면에 AI 3개, 껐다 켜도 유지
 - **`handoff`** — 세션이 끝나면 그동안의 커밋을 레포의 핸드오프 문서에 기록
-- **`ai-status`** — 세션 최상단 바. 패널별 모델·컨텍스트·사용 한도
+- **`ai-status`** — 세션 최상단 바. 패널별 모델과 남은 사용량
 - **`claude-statusline`** — Claude Code 상태줄. 위 바에 쓸 데이터도 남긴다
 - **`codex-session` · `agy-session`** — `ai` 가 패널에서 쓰는 래퍼. 직접 칠 일은 없다
 
@@ -138,7 +138,7 @@ handoff Codex
 Claude Code 하단 상태줄에 이렇게 뜬다.
 
 ```
-Opus 5 high · ctx 29% · 5h 41% (2h11m) · wk 63% (3d5h)
+Opus 5 high · 5h ▓▓░░░░░░ 28% (2h26m) · wk ▓▓▓▓▓░░░ 64% (1d5h)
 ```
 
 Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. 거기에 `rate_limits.five_hour` · `seven_day` 가 `used_percentage` 와 `resets_at` 로 들어 있다. **CLI 에서 5시간/주간 한도를 보는 방법은 이것뿐이다** — 별도 서브커맨드는 없고, `/status` 로 세션 중 확인만 가능하다.
@@ -152,7 +152,7 @@ Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. �
 `ai` 세션 최상단 1행. 5초마다 갱신. **열려 있는 패널만** 표시한다 — `zellij action dump-layout` 의 패널 이름을 읽어 거른다.
 
 ```
-claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h26m) wk ▓▓▓▓▓░░░ 64%(1d5h)   codex gpt-5.6-sol xhigh 47.4M tok   antigravity -
+claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h26m) wk ▓▓▓▓▓░░░ 64%(1d5h)   codex gpt-5.6-sol xhigh 50.1M tok   antigravity gemini-3.6-flash-high
 ```
 
 배터리 바는 **남은 양**이다. `5h ▓▓░░░░░░ 28%` 는 5시간 창에서 28% 남았고 2시간 26분 뒤 리셋된다는 뜻. 리셋 시각이 지난 창은 표시하지 않는다.
@@ -165,7 +165,8 @@ claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h26m) wk ▓▓▓▓▓░░�
 |---|---|---|
 | Claude | `claude-statusline` 이 남기는 `~/.cache/ai-tools/claude.<레포>.json` (모델·컨텍스트)<br>`claude-limits.json` (한도, 계정 단위 공유) | 모델 · 컨텍스트% · 5시간/주간 한도 |
 | Codex | `~/.codex/state_5.sqlite` 의 `threads` | 모델 · reasoning effort · 스레드 누적 토큰 |
-| Antigravity · Kimi · Grok | 없음 | `-` |
+| Antigravity | `~/.gemini/antigravity-cli/conversations/*.db` | 모델 |
+| Gemini · Kimi · Grok | 없음 | `-` |
 
 > **값이 `-` 로만 나온다면** 대개 둘 중 하나다.
 >
@@ -178,6 +179,9 @@ claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h26m) wk ▓▓▓▓▓░░�
 - **Claude 값은 Claude Code 를 한 번 띄워야 채워진다.** statusLine 이 그릴 때 캐시가 쓰인다. 1시간 지난 값은 버린다.
 - Codex 의 `43.4M tok` 은 현재 컨텍스트가 아니라 **스레드 누적 토큰**이다. Claude 의 `ctx 29%` 와 다른 의미다.
 - Codex 는 `thread_source='user'` 로 걸러 `codex-auto-review` 같은 서브에이전트 스레드를 제외한다.
+- SQLite 는 `immutable=1` 로 연다. 쓰기 중이면 열기가 실패해 값이 깜빡였다. 그래도 실패한 틱에서는 **마지막 성공값을 유지**한다.
+- Antigravity 는 대화 DB 가 protobuf 라 모델명만 문자열로 긁는다. 토큰·한도는 못 읽는다.
+- 상태 바 패널은 **입력 에코를 꺼 둔다**. zellij 에 '포커스 불가' 옵션이 없어 클릭 자체는 막지 못하지만, 클릭 후 타이핑해도 바가 밀리지 않는다.
 - Antigravity · Kimi · Grok 은 모델·토큰·한도를 로컬 파일에 남기지 않는다. Grok 은 사용량을 OpenTelemetry 로만 내보내고(자체 컬렉터 필요), 세션 중 `/cost` · `/context` 로만 볼 수 있다. 남기기 시작하면 `ai-status` 에 함수 하나 추가하면 된다.
 
 단독 실행:

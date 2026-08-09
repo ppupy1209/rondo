@@ -48,8 +48,6 @@ def main():
         parts[0] += f" {effort}"
 
     used = (data.get("context_window") or {}).get("used_percentage")
-    if used is not None:
-        parts.append(f"ctx {used:.0f}%")
 
     limits = data.get("rate_limits") or {}
     for key, label in (("five_hour", "5h"), ("seven_day", "wk")):

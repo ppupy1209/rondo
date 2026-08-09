@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""zellij 상단 바 — 패널별 모델 · 컨텍스트 · 사용 한도.
+"""zellij 상단 바 — 패널별 모델과 남은 사용량.
 
 각 CLI 가 로컬에 남기는 것만 읽는다. 자격증명으로 API 를 호출하지 않는다.
 
-  claude  statusLine 이 남긴 캐시 (모델 · 컨텍스트% · 5시간/주간 한도)
-  codex   ~/.codex/state_5.sqlite 의 threads (모델 · 누적 토큰)
-  antigravity·gemini·kimi·grok  로컬에 사용량 상태를 남기지 않음 — "-" 로 표시
+  claude       statusLine 이 남긴 캐시 (모델) + 계정 단위 한도 캐시 (5시간/주간)
+  codex        ~/.codex/state_5.sqlite 의 threads (모델 · 누적 토큰)
+  antigravity  ~/.gemini/antigravity-cli/conversations/*.db (모델)
+  gemini·kimi·grok  로컬에 상태를 남기지 않음 — "-" 로 표시
 
-열려 있는 패널만 표시한다(zellij dump-layout 기준).
-
-한 번만 출력하려면 --once.
+열려 있는 패널만 표시한다(zellij dump-layout 기준). 한 번만 출력하려면 --once.
 """
 import json
 import os
@@ -18,6 +17,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import termios
 import time
 
 CACHE = os.path.join(
@@ -25,9 +25,14 @@ CACHE = os.path.join(
 )
 LIMITS = os.path.join(CACHE, "claude-limits.json")
 CODEX_DB = os.path.expanduser("~/.codex/state_5.sqlite")
+AGY_DIR = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
 BAR_CELLS = 8
 STALE_SECONDS = 3600
 INTERVAL = 5
+
+# 읽기에 실패한 틱에서 값이 사라지지 않도록 마지막 성공값을 들고 있는다.
+# DB 가 쓰기 중이면 열기가 실패해 바가 깜빡이던 문제를 막는다.
+LAST = {}
 
 
 def repo_root():
@@ -41,6 +46,19 @@ def repo_root():
     except (OSError, subprocess.SubprocessError):
         pass
     return os.getcwd()
+
+
+def query(path, sql, args=()):
+    """쓰기 중인 DB 도 읽히도록 immutable 로 연다. 잠금·-shm 문제를 피한다."""
+    if not os.path.exists(path):
+        return None
+    try:
+        con = sqlite3.connect("file:%s?immutable=1" % path, uri=True, timeout=1)
+        row = con.execute(sql, args).fetchone()
+        con.close()
+        return row
+    except sqlite3.Error:
+        return None
 
 
 def short_model(name):
@@ -59,7 +77,15 @@ def battery(used_pct):
     """남은 비율을 배터리처럼. used 72 -> 28% 남음."""
     left = max(0.0, min(100.0, 100.0 - used_pct))
     filled = int(round(left / 100 * BAR_CELLS))
-    return "\u2593" * filled + "\u2591" * (BAR_CELLS - filled), left
+    return "▓" * filled + "░" * (BAR_CELLS - filled), left
+
+
+def until(epoch):
+    secs = max(0, int(epoch - time.time()))
+    mins, hours = secs // 60 % 60, secs // 3600
+    if hours >= 24:
+        return f"{hours // 24}d{hours % 24}h"
+    return f"{hours}h{mins:02d}m" if hours else f"{mins}m"
 
 
 def claude_limits():
@@ -74,54 +100,34 @@ def claude_limits():
     return {k: v for k, v in limits.items() if v.get("resets_at", 0) > now}
 
 
-def until(epoch):
-    secs = max(0, int(epoch - time.time()))
-    mins, hours = secs // 60 % 60, secs // 3600
-    if hours >= 24:
-        return f"{hours // 24}d{hours % 24}h"
-    return f"{hours}h{mins:02d}m" if hours else f"{mins}m"
-
-
 def claude_field(root):
     limits = claude_limits()
-    path = os.path.join(CACHE, "claude.%s.json" % os.path.basename(root))
     try:
-        with open(path) as fh:
-            d = json.load(fh)
+        with open(os.path.join(CACHE, "claude.%s.json" % os.path.basename(root))) as fh:
+            data = json.load(fh)
     except (OSError, ValueError):
-        d = {}
-    # 다른 레포의 동명 프로젝트이거나 오래된 값이면 모델·컨텍스트는 쓰지 않는다
-    if d.get("project") != root or time.time() - d.get("at", 0) > STALE_SECONDS:
-        d = {}
-    if not d and not limits:
-        return None
+        data = {}
+    # 다른 레포의 동명 프로젝트이거나 오래된 값이면 모델은 쓰지 않는다
+    if data.get("project") != root or time.time() - data.get("at", 0) > STALE_SECONDS:
+        data = {}
 
-    bits = [short_model(d.get("model"))] if d.get("model") else []
-    if d.get("context_used") is not None:
-        bits.append(f"ctx {d['context_used']:.0f}%")
+    bits = [short_model(data["model"])] if data.get("model") else []
     for key, label in (("five_hour", "5h"), ("seven_day", "wk")):
         window = limits.get(key)
         if window:
             bar, left = battery(window["used_percentage"])
             bits.append(f"{label} {bar} {left:.0f}%({until(window['resets_at'])})")
-    return " ".join(bits)
+    return " ".join(bits) or None
 
 
 def codex_field(root):
-    if not os.path.exists(CODEX_DB):
-        return None
-    try:
-        con = sqlite3.connect("file:%s?mode=ro" % CODEX_DB, uri=True, timeout=1)
-        row = con.execute(
-            # thread_source='user' 로 서브에이전트(auto-review 등) 스레드를 제외한다
-            "SELECT model, reasoning_effort, tokens_used FROM threads "
-            "WHERE cwd = ? AND thread_source = 'user' "
-            "ORDER BY updated_at_ms DESC LIMIT 1",
-            (root,),
-        ).fetchone()
-        con.close()
-    except sqlite3.Error:
-        return None
+    # thread_source='user' 로 서브에이전트(auto-review 등) 스레드를 제외한다
+    row = query(
+        CODEX_DB,
+        "SELECT model, reasoning_effort, tokens_used FROM threads "
+        "WHERE cwd = ? AND thread_source = 'user' ORDER BY updated_at_ms DESC LIMIT 1",
+        (root,),
+    )
     if not row:
         return None
     model, effort, used = row
@@ -134,11 +140,28 @@ def codex_field(root):
     return " ".join(bits)
 
 
-# 패널 이름 -> 값을 읽는 함수. 값이 없는 CLI 는 로컬에 상태를 안 남긴다.
+def antigravity_field(_root):
+    # ponytail: 대화 DB 가 protobuf blob 이라 모델명만 문자열로 긁는다.
+    # 토큰·한도는 스키마를 알아야 하므로 생략. agy 가 평문 필드를 노출하면 교체.
+    try:
+        dbs = [os.path.join(AGY_DIR, f) for f in os.listdir(AGY_DIR) if f.endswith(".db")]
+    except OSError:
+        return None
+    if not dbs:
+        return None
+    try:
+        with open(max(dbs, key=os.path.getmtime), "rb") as fh:
+            blob = fh.read()
+    except OSError:
+        return None
+    names = re.findall(rb"gemini-[0-9a-z.\-]+", blob)
+    return max((n.decode() for n in names), key=len) if names else None
+
+
 AGENTS = [
     ("claude", claude_field),
     ("codex", codex_field),
-    ("antigravity", None),
+    ("antigravity", antigravity_field),
     ("gemini", None),
     ("kimi", None),
     ("grok", None),
@@ -168,13 +191,31 @@ def line(root):
         if panes is not None and name not in panes:
             continue
         value = reader(root) if reader else None
+        if value:
+            LAST[name] = value
+        else:
+            value = LAST.get(name)
         parts.append(f"{name} {value or '-'}")
     return "   ".join(parts) or "패널 없음"
+
+
+def mute_input(fd):
+    """상태 바는 읽을 게 없다. 클릭해서 타이핑해도 화면이 밀리지 않도록 에코를 끈다."""
+    try:
+        attrs = termios.tcgetattr(fd)
+        attrs[3] &= ~(termios.ECHO | termios.ICANON)
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except (termios.error, OSError, ValueError):
+        pass
 
 
 def main():
     root = repo_root()
     once = "--once" in sys.argv
+    fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+    if fd is not None:
+        mute_input(fd)
+
     while True:
         text = line(root)
         # 1행 패널이라 폭을 넘으면 줄바꿈돼 깨진다. 잘라낸다.
@@ -187,6 +228,12 @@ def main():
         if once:
             print()
             return
+        if fd is not None:
+            # 클릭 후 눌린 키가 버퍼에 쌓이지 않도록 버린다
+            try:
+                termios.tcflush(fd, termios.TCIFLUSH)
+            except (termios.error, OSError):
+                pass
         time.sleep(INTERVAL)
 
 
