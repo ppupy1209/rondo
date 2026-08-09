@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -45,6 +46,9 @@ TEXT = {
   rondo send <에이전트> <메시지>
                         대상 패널에 메시지 입력·전송
   rondo lens [URL]      화면 요소를 클릭해 해당 맥락만 전달
+  rondo race "<과제>"   같은 과제를 여러 에이전트에게 각자 worktree 에서
+  rondo diff [에이전트]  race 결과 비교
+  rondo take <에이전트>  race 결과 채택
   rondo language        한국어 / English 변경
   rondo relay [모드]    Claude → Codex 인계 상태 / 모드 변경
   rondo continue        준비된 인계를 Codex에서 계속
@@ -93,6 +97,19 @@ TEXT = {
         "doctor_hint": "필수 항목을 설치한 뒤 `rondo setup`을 실행하세요.",
         "doctor_deep_title": "벤더 데이터 점검",
         "doctor_deep_hint": "`rondo doctor --deep`으로 벤더 데이터까지 점검합니다.",
+        "race_usage": "사용법: rondo race \"<과제>\"",
+        "race_none": "참가할 에이전트가 없습니다. 한도가 남은 에이전트가 없거나 설치되지 않았습니다.",
+        "race_plan": "race 참가자",
+        "race_skip": "제외 ({reason})",
+        "race_confirm": "같은 과제를 {count}개 에이전트에게 보냅니다. 각자 한도를 소모합니다. [y/N] ",
+        "race_cancelled": "취소했습니다.",
+        "race_started": "race {run} 시작 · base {base}",
+        "race_sent": "과제를 {count}개 패널에 넣었습니다.",
+        "race_missing": "진행 중인 race 가 없습니다.",
+        "race_aborted": "race 를 폐기했습니다. patch {count}개를 남겼습니다.",
+        "race_taken": "{name} 결과를 원본 트리에 얹었습니다. 커밋은 직접 하세요.",
+        "race_empty_take": "{name} 은(는) 바꾼 것이 없습니다. race 만 정리했습니다.",
+        "take_usage": "사용법: rondo take <에이전트>",
         "doctor_unknown_version": "버전 확인 불가",
         "doctor_changed": "벤더 업데이트로 깨진 항목",
         "select_auto_no_codex": "자동 인계에는 선택된 Codex 패널과 CLI가 필요합니다.",
@@ -159,6 +176,19 @@ Inside a session
         "doctor_hint": "Install required items, then run `rondo setup`.",
         "doctor_deep_title": "Vendor data probe",
         "doctor_deep_hint": "Run `rondo doctor --deep` to probe vendor data too.",
+        "race_usage": "Usage: rondo race \"<task>\"",
+        "race_none": "No agent can join. None has quota left, or none is installed.",
+        "race_plan": "Race participants",
+        "race_skip": "skipped ({reason})",
+        "race_confirm": "Sending the same task to {count} agents. Each spends its own quota. [y/N] ",
+        "race_cancelled": "Cancelled.",
+        "race_started": "race {run} started · base {base}",
+        "race_sent": "Task delivered to {count} panes.",
+        "race_missing": "No race in progress.",
+        "race_aborted": "Race discarded. Kept {count} patches.",
+        "race_taken": "Applied {name} to the working tree. Commit it yourself.",
+        "race_empty_take": "{name} changed nothing. Cleaned up the race.",
+        "take_usage": "Usage: rondo take <agent>",
         "doctor_unknown_version": "version unknown",
         "doctor_changed": "Broken by a vendor update",
         "select_auto_no_codex": "Automatic relay requires a selected Codex pane and CLI.",
@@ -672,6 +702,197 @@ def deep_probe() -> bool:
     return bool(warnings)
 
 
+RACE_TAB = "race"
+
+
+def race_layout(race) -> str:
+    """race 탭 KDL. 패널마다 자기 worktree 를 cwd 로 잡는다.
+
+    *-session 래퍼가 아니라 원본 명령을 띄운다 — worktree 에서 handoff 를 돌리면 안 된다.
+    """
+    lines = [f'layout {{\n    tab name="{RACE_TAB}" focus=true {{',
+             '        pane split_direction="vertical" {']
+    for agent, path in race.agents.items():
+        binary = AGENTS[agent][1]
+        lines.append(f'            pane name="race-{agent}" cwd="{path}" command="{binary}"')
+    lines += ["        }", "    }", "}"]
+    return "\n".join(lines)
+
+
+def race_panes() -> dict[str, str]:
+    """race 탭에 열려 있는 패널 이름 -> 패널 id."""
+    try:
+        result = subprocess.run(
+            ["zellij", "action", "list-panes", "--json"],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        panes = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError, OSError, subprocess.SubprocessError):
+        return {}
+    found = {}
+    for pane in panes:
+        title = str(pane.get("title", ""))
+        if pane.get("tab_name") == RACE_TAB and title.startswith("race-") and not pane.get("exited"):
+            found[title[len("race-"):]] = str(pane["id"])
+    return found
+
+
+def race_send(race, wait: float = 4.0) -> int:
+    """과제를 각 race 패널에 넣는다. 사람이 친 것과 같은 경로(paste + Enter)."""
+    deadline = time.monotonic() + wait
+    panes = race_panes()
+    while len(panes) < len(race.agents) and time.monotonic() < deadline:
+        time.sleep(0.3)
+        panes = race_panes()
+    time.sleep(1.0)  # TUI 가 입력을 받을 준비를 할 틈
+
+    sent = 0
+    for agent, pane in panes.items():
+        if agent not in race.agents:
+            continue
+        try:
+            subprocess.run(["zellij", "action", "paste", "--pane-id", pane, "--", race.task],
+                           check=False, timeout=10)
+            subprocess.run(["zellij", "action", "send-keys", "--pane-id", pane, "Enter"],
+                           check=False, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        sent += 1
+    return sent
+
+
+def race_participants(requested: str | None) -> list[str]:
+    """지정이 없으면 설정된 패널 중 설치됐고 한도가 남은 것만."""
+    from rondo import race as race_lib
+    from rondo import registry
+
+    configured = [name for name in configured_panels() if name in AGENTS]
+    if requested:
+        wanted = [name.strip() for name in requested.split(",") if name.strip()]
+        return [name for name in wanted if name in AGENTS and installed(name)]
+
+    root = repo_root()
+    snapshots = {}
+    for name in configured:
+        if not installed(name):
+            continue
+        adapter = registry.get(name)
+        snapshots[name] = adapter.snapshot(root) if adapter else None
+
+    joining, skipped = race_lib.eligible(snapshots)
+    print(t("race_plan"))
+    for name in configured:
+        if name in joining:
+            print(f"  {name}")
+        elif name in skipped:
+            print(f"  {name}  {t('race_skip', reason=skipped[name])}")
+    return joining
+
+
+def race_command(args: list[str]) -> int:
+    from rondo import race as race_lib
+
+    root = repo_root()
+    if "--abort" in args:
+        race = race_lib.load(root)
+        if race is None:
+            print(t("race_missing"), file=sys.stderr)
+            return 1
+        saved = race_lib.abort(race)
+        print(t("race_aborted", count=len(saved)))
+        return 0
+
+    if "--status" in args:
+        race = race_lib.load(root)
+        if race is None:
+            print(t("race_missing"))
+            return 0
+        print(t("race_started", run=race.run_id, base=race.base[:8]))
+        print(f"  {race.task}")
+        for row in race_lib.summary(race):
+            print("  " + _race_row(row))
+        return 0
+
+    if "--send" in args:
+        race = race_lib.load(root)
+        if race is None:
+            print(t("race_missing"), file=sys.stderr)
+            return 1
+        print(t("race_sent", count=race_send(race, wait=1.0)))
+        return 0
+
+    requested = None
+    if "--agents" in args:
+        index = args.index("--agents")
+        requested = args[index + 1] if index + 1 < len(args) else None
+        args = args[:index] + args[index + 2:]
+    task = " ".join(a for a in args if not a.startswith("--")).strip()
+    if not task:
+        print(t("race_usage"), file=sys.stderr)
+        return 1
+    if not os.environ.get("ZELLIJ_SESSION_NAME"):
+        raise RuntimeError(t("need_zellij"))
+
+    agents = race_participants(requested)
+    if not agents:
+        print(t("race_none"), file=sys.stderr)
+        return 1
+    if "--yes" not in args:
+        answer = input(t("race_confirm", count=len(agents))).strip().lower()
+        if answer not in ("y", "yes"):
+            print(t("race_cancelled"))
+            return 0
+
+    race = race_lib.start(root, task, agents)
+    print(t("race_started", run=race.run_id, base=race.base[:8]))
+    try:
+        subprocess.run(["zellij", "action", "new-tab", "--layout-string", race_layout(race)],
+                       check=False, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    print(t("race_sent", count=race_send(race)))
+    return 0
+
+
+def _race_row(row: dict) -> str:
+    if row.get("error"):
+        return f"{row['agent']:<8} {row['error']}"
+    return (f"{row['agent']:<8} {row['files']:>3} files  "
+            f"+{row['added']:<5} -{row['removed']}")
+
+
+def diff_command(agent: str | None) -> int:
+    from rondo import race as race_lib
+
+    race = race_lib.load(repo_root())
+    if race is None:
+        print(t("race_missing"), file=sys.stderr)
+        return 1
+    if agent:
+        print(race_lib.diff_text(race, agent), end="")
+        return 0
+    print(t("race_started", run=race.run_id, base=race.base[:8]))
+    print(f"  {race.task}\n")
+    for row in race_lib.summary(race):
+        print("  " + _race_row(row))
+    return 0
+
+
+def take_command(agent: str | None) -> int:
+    from rondo import race as race_lib
+
+    if not agent:
+        print(t("take_usage"), file=sys.stderr)
+        return 1
+    race = race_lib.load(repo_root())
+    if race is None:
+        print(t("race_missing"), file=sys.stderr)
+        return 1
+    result = race_lib.take(race, agent)
+    print(t("race_taken" if result["applied"] else "race_empty_take", name=agent))
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
     command = args[0] if args else ""
@@ -689,6 +910,12 @@ def main() -> int:
         send_agent_message(args[1] if len(args) > 1 else None, args[2:])
     elif command == "lens":
         open_lens(args[1:])
+    elif command == "race":
+        return race_command(args[1:])
+    elif command == "diff":
+        return diff_command(args[1] if len(args) > 1 else None)
+    elif command == "take":
+        return take_command(args[1] if len(args) > 1 else None)
     elif command in ("language", "lang"):
         change_language()
     elif command == "relay":
