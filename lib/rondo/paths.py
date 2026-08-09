@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 from pathlib import Path
 
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
@@ -25,10 +26,17 @@ def setting(name: str, default: str = "") -> str:
 def atomic_json(path: Path, data: dict) -> None:
     """부분 기록된 JSON 을 읽는 일이 없도록 임시 파일에 쓰고 갈아끼운다."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    temp.write_text(json.dumps(data, ensure_ascii=False))
-    os.chmod(temp, 0o600)
-    temp.replace(path)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(temp, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def read_json(path: Path) -> dict:

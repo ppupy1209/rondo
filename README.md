@@ -14,6 +14,7 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 - 모든 에이전트 패널에 함께 적용되는 사용자별 설명 수준
 - 모델·사용량·인계 상태를 한눈에 보는 공통 상태 표시줄
 - `rondo send`를 통한 화면에 보이는 에이전트 간 요청
+- 사용자 승인형 프로젝트 기억·재사용 절차와 작업 이력 검색
 - Rondo Lens를 통한 화면 요소 단위 프론트엔드 요청
 - Rondo Proof를 통한 실행 가능한 증거와 위험 기반 사람 검토 큐
 - 구현 세션과 물리적으로 분리되는 레드팀·블루팀·신뢰성·보안 테스트
@@ -64,6 +65,8 @@ rondo setup       # 저장된 언어·설명·승인·에이전트·인계 설�
 rondo audience    # 모든 에이전트의 결과 설명 수준 변경
 rondo add         # 에이전트를 선택해 패널 추가
 rondo send codex "현재 diff를 검토해 주세요"  # Codex 패널에 입력하고 전송
+rondo learn pending  # 에이전트와 사용자가 제안한 프로젝트 지식 검토
+rondo recall "인증"  # 승인 지식·작업 이력·최근 Git 커밋 검색
 rondo lens        # 화면 요소를 클릭해 해당 맥락만 전달
 rondo proof       # 검증 실행 후 위험 기반 검토 패킷 생성
 rondo test all --from codex --tester claude  # 구현자와 분리된 독립 테스트
@@ -130,6 +133,29 @@ rondo send gemini "다른 구현 방식을 조사해 주세요"
 Rondo 세션 안에서 대상 패널이 열린 상태로 실행해야 합니다. 각 에이전트도 셸 도구에서 같은 명령을 실행할 수 있으므로 사용자의 직접 요청, 에이전트 간 위임, 자동 인계가 모두 화면에 보이는 하나의 입력 경로를 사용합니다.
 
 전송 전에 패널 화면을 읽어 신뢰·승인·선택 프롬프트가 보이면 아무 키도 누르지 않고 중단합니다. 안전한 화면에서는 메시지를 먼저 붙여넣고 입력란에 실제로 보이는지 확인한 뒤에만 Enter를 보냅니다. 따라서 Rondo가 사용자 대신 폴더 신뢰 여부를 승인하지 않습니다.
+
+## 승인형 프로젝트 기억과 절차
+
+Rondo는 저장소별로 오래 유지할 사실과 반복 가능한 작업 절차를 보관합니다. 사용자와 에이전트 모두 제안할 수 있지만, 제안은 승인 전까지 검색 결과와 에이전트 시작 지침에 절대 포함되지 않습니다. 미승인 원문은 에이전트가 목록이나 `show`로 읽을 수도 없습니다.
+
+```sh
+rondo learn memory "공개 API 변경에는 호환성 설명을 남긴다"
+rondo learn skill release-check "테스트 보고서를 확인한 뒤 사용자 승인 후 배포한다"
+rondo learn pending                 # 승인 대기 목록
+rondo learn show a1b2c3d4           # 원문 확인
+rondo learn approve a1b2c3d4        # 원문 재표시 + y/N 승인
+rondo learn reject a1b2c3d4
+rondo learn remove a1b2c3d4         # 승인된 항목 삭제
+
+rondo recall "호환성"               # 승인 지식·Rondo 작업 이력·최근 100개 커밋 검색
+rondo recall --id a1b2c3d4          # 절차 원문을 ID로 불러오기
+```
+
+승인된 `memory`는 새 에이전트 세션에 제한된 크기로 공유됩니다. `skill`은 이름·ID·첫 줄 요약만 공유하고, 에이전트가 필요할 때 `rondo recall --id ...`로 원문을 불러옵니다. 절차는 참고 텍스트일 뿐 플러그인이나 실행 코드로 활성화되지 않습니다. 이미 열려 있는 세션은 `rondo recall`로 새 항목을 확인할 수 있습니다.
+
+승인·거절·삭제는 대화형 사용자 터미널에서만 가능하며, Rondo 안에서는 현재 프로세스가 `shell` 탭에 있는지도 확인합니다. 에이전트 패널, race 탭, 파이프·스크립트 실행에서는 거부합니다. 제안은 2,000자, 승인 기억은 총 4,000자, 절차는 16개로 제한하고, 일반적인 비밀값·프롬프트 주입·파괴 명령 패턴과 보이지 않는 제어 문자를 저장 전에 차단합니다. 여러 에이전트의 동시 쓰기는 저장소별 잠금으로 직렬화하며, 손상되거나 심볼릭 링크로 바뀐 상태 파일은 사용하지 않습니다.
+
+검색 이력에는 Rondo가 만든 짧은 작업 이벤트와 Git 커밋 제목만 들어가며 Claude·Codex·Gemini 대화 원문을 수집하지 않습니다. 데이터는 네트워크 서비스 없이 `~/.cache/rondo/knowledge/`에 비공개 권한으로 저장됩니다. 같은 운영체제 사용자 권한을 이미 가진 악성 프로세스를 격리하는 비밀 저장소는 아니므로 토큰·비밀번호 같은 민감정보는 기록하지 마세요.
 
 ## Rondo Lens
 
@@ -344,6 +370,9 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo add [agent]` | 패널 추가, 인자를 생략하면 선택 화면 표시 |
 | `rondo send <agent> <message>` | 대상 패널에 보이는 요청을 입력하고 전송 |
 | `rondo task <목표> [옵션]` | 인수 조건·금지 조건·scope·검증 명령 기록 |
+| `rondo learn memory\|skill ...` | 저장소 기억·재사용 절차를 승인 대기로 제안 |
+| `rondo learn pending\|show\|approve\|reject\|remove` | 프로젝트 지식의 사용자 승인 수명주기 관리 |
+| `rondo recall [검색어\|--id ID]` | 승인 지식·작업 이벤트·최근 Git 이력 검색 |
 | `rondo proof [--reviewer 에이전트]` | 검증 실행 후 독립 검토 패킷 생성 |
 | `rondo review [--budget 2m]` | 시간 예산 안에서 고위험 사람 판단부터 표시 |
 | `rondo git [명령]` | Git 연결 상태와 저장소별 PR·reviewer 정책 관리 |
@@ -391,13 +420,14 @@ zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 �
   claude.*       로컬 표시 캐시
   lens/          비공개 요소 맥락 파일과 부분 스크린샷
   proof/         비공개 작업 의도, 증거 패킷, 검토 큐
+  knowledge/     저장소별 승인 기억·절차와 짧은 작업 이벤트
   test/          독립 테스트 worktree 상태, 보고서, k6 결과와 Grafana 캡처
   relay/         비공개 인계 패킷과 전달 로그
 ```
 
 저장소별 `rondo.prPolicy`와 `rondo.reviewers`는 `.git/config`에 보관됩니다. 대화형 화면 없이 설정하려면 `rondo setup` 실행 전에 `RONDO_LANG=ko|en`, `RONDO_AUDIENCE=default|nondev|guided`, `RONDO_APPROVAL=ask|workspace`, `RONDO_PANELS=claude,codex,...`, `RONDO_RELAY=off|ready|auto`를 지정합니다.
 
-텔레메트리는 없습니다. Rondo는 자격증명을 저장하지 않습니다. 인계 패킷에는 대화 일부가 포함될 수 있으므로, 명시적인 동작 없이 공급자 간 내용 공유를 원하지 않으면 기본 `ready` 모드를 사용하세요.
+텔레메트리는 없습니다. Rondo는 자격증명을 저장하지 않으며 프로젝트 지식을 만들기 위해 에이전트 대화 원문을 수집하지 않습니다. 인계 패킷에는 대화 일부가 포함될 수 있으므로, 명시적인 동작 없이 공급자 간 내용 공유를 원하지 않으면 기본 `ready` 모드를 사용하세요.
 
 ## 개발 및 검증
 

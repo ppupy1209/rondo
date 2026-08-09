@@ -26,8 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from rondo import approval as approval_lib
 from rondo import audience as audience_lib
+from rondo.paths import repo_key
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -81,6 +82,14 @@ TEXT = {
                         인계 파일로 Claude/Codex 작업 재개
   rondo task "<목표>" [--accept 조건] [--avoid 조건]
                         검증할 의도와 성공 조건 기록
+  rondo learn memory "<기억>"
+                        저장소 기억을 승인 대기 상태로 제안
+  rondo learn skill <이름> "<절차>"
+                        재사용 절차를 승인 대기 상태로 제안
+  rondo learn [pending|show|approve|reject|remove] [ID]
+                        프로젝트 지식 검토·승인·삭제
+  rondo recall [검색어|--id ID]
+                        승인된 기억·절차·작업 이력 검색
   rondo proof [--reviewer codex] [--no-checks]
                         실행 증거·위험도·사람 판단 항목 생성
   rondo git [명령]      Git 연결·PR 정책·reviewer 설정
@@ -214,6 +223,35 @@ TEXT = {
         "resume_unsupported": "resume은 현재 Claude와 Codex를 지원합니다: {name}",
         "task_usage": "사용법: rondo task \"<목표>\" [--accept 조건] [--avoid 조건] [--scope 경로] [--check 명령]",
         "task_saved": "검증 목표를 저장했습니다 · 성공 조건 {acceptance}개 · 금지 조건 {must_not}개",
+        "learn_usage": "사용법: rondo learn memory \"<기억>\" | skill <이름> \"<절차>\" | pending | show <ID> | approve <ID> | reject <ID> | remove <ID>",
+        "learn_proposed": "승인 대기 제안 {id} · {kind}{name} · 제안자 {source}",
+        "learn_pending": "승인 대기 프로젝트 지식",
+        "learn_active": "승인된 프로젝트 지식",
+        "learn_empty": "저장된 프로젝트 지식이 없습니다.",
+        "learn_candidate": "{id} · {kind}{name} · 제안자 {source}\n{content}",
+        "learn_confirm_approve": "이 내용을 모든 에이전트가 사용할 수 있도록 승인할까요? [y/N] ",
+        "learn_confirm_reject": "이 제안을 폐기할까요? [y/N] ",
+        "learn_confirm_remove": "승인된 프로젝트 지식을 삭제할까요? [y/N] ",
+        "learn_approved": "프로젝트 지식을 승인했습니다: {id}. 열린 에이전트는 `rondo recall --id {id}`로 읽고, 새 세션에는 자동 적용됩니다.",
+        "learn_rejected": "프로젝트 지식 제안을 폐기했습니다: {id}",
+        "learn_removed": "승인된 프로젝트 지식을 삭제했습니다: {id}",
+        "learn_human_only": "승인·거절·삭제는 Rondo shell 탭 또는 별도의 대화형 터미널에서 사용자가 직접 해야 합니다.",
+        "recall_usage": "사용법: rondo recall [검색어] | rondo recall --id <ID>",
+        "recall_title": "Rondo Recall",
+        "recall_empty": "일치하는 승인 지식이나 작업 이력이 없습니다.",
+        "knowledge_error": "프로젝트 지식을 처리하지 못했습니다: {reason}",
+        "knowledge_errors": {
+            "invalid_kind": "memory 또는 skill만 지원합니다", "empty": "내용이 비어 있습니다",
+            "too_long": "내용은 2,000자 이하여야 합니다", "unsafe_secret": "비밀값으로 보이는 내용이 포함되어 있습니다",
+            "unsafe_instruction": "프롬프트 주입 또는 위험한 명령 패턴이 포함되어 있습니다",
+            "invalid_name": "이름이 비었거나 안전하지 않습니다", "pending_full": "승인 대기 제안이 너무 많습니다",
+            "duplicate": "같은 내용이 이미 있습니다", "not_found": "ID를 찾지 못했거나 모호합니다",
+            "memory_full": "승인된 기억 한도를 넘습니다. 기존 기억을 정리하세요",
+            "skill_full": "승인된 절차 한도를 넘습니다. 기존 절차를 정리하세요",
+            "state_unsafe": "저장 파일이 손상되었거나 심볼릭 링크로 바뀌었습니다",
+            "busy": "다른 Rondo 프로세스가 프로젝트 지식을 갱신 중입니다. 잠시 후 다시 시도하세요",
+            "human_only": "이 작업은 사용자가 직접 승인해야 합니다"
+        },
         "proof_title": "Rondo Proof · {verdict}",
         "proof_ready": "승인 후보",
         "proof_review": "사람 검토 필요",
@@ -290,6 +328,14 @@ TEXT = {
   rondo resume [agent]  Resume it in Claude or Codex
   rondo task "<goal>" [--accept condition] [--avoid condition]
                         Record intent and acceptance criteria
+  rondo learn memory "<fact>"
+                        Propose repository memory for human approval
+  rondo learn skill <name> "<procedure>"
+                        Propose a reusable procedure for human approval
+  rondo learn [pending|show|approve|reject|remove] [ID]
+                        Review, approve, or remove project knowledge
+  rondo recall [query|--id ID]
+                        Search approved memory, procedures, and work history
   rondo proof [--reviewer codex] [--no-checks]
                         Build evidence, risk, and human decisions
   rondo git [command]   Connect Git and configure PR/reviewer policy
@@ -423,6 +469,35 @@ Inside a session
         "resume_unsupported": "Resume currently supports Claude and Codex: {name}",
         "task_usage": "Usage: rondo task \"<goal>\" [--accept condition] [--avoid condition] [--scope path] [--check command]",
         "task_saved": "Saved verification intent · {acceptance} acceptance · {must_not} constraints",
+        "learn_usage": "Usage: rondo learn memory \"<fact>\" | skill <name> \"<procedure>\" | pending | show <ID> | approve <ID> | reject <ID> | remove <ID>",
+        "learn_proposed": "Pending proposal {id} · {kind}{name} · source {source}",
+        "learn_pending": "Pending project knowledge",
+        "learn_active": "Approved project knowledge",
+        "learn_empty": "No project knowledge has been saved.",
+        "learn_candidate": "{id} · {kind}{name} · source {source}\n{content}",
+        "learn_confirm_approve": "Approve this for use by every agent? [y/N] ",
+        "learn_confirm_reject": "Discard this proposal? [y/N] ",
+        "learn_confirm_remove": "Remove this approved project knowledge? [y/N] ",
+        "learn_approved": "Approved project knowledge: {id}. Open agents can read it with `rondo recall --id {id}`; new sessions receive it automatically.",
+        "learn_rejected": "Discarded project knowledge proposal: {id}",
+        "learn_removed": "Removed approved project knowledge: {id}",
+        "learn_human_only": "Approval, rejection, and removal must be performed by the user in the Rondo shell tab or another interactive terminal.",
+        "recall_usage": "Usage: rondo recall [query] | rondo recall --id <ID>",
+        "recall_title": "Rondo Recall",
+        "recall_empty": "No approved knowledge or work history matched.",
+        "knowledge_error": "Could not process project knowledge: {reason}",
+        "knowledge_errors": {
+            "invalid_kind": "only memory or skill is supported", "empty": "content is empty",
+            "too_long": "content must be at most 2,000 characters", "unsafe_secret": "the content appears to contain a secret",
+            "unsafe_instruction": "the content contains a prompt-injection or dangerous-command pattern",
+            "invalid_name": "the name is empty or unsafe", "pending_full": "too many proposals are pending",
+            "duplicate": "the same content already exists", "not_found": "the ID is missing or ambiguous",
+            "memory_full": "approved memory is full; remove an older entry",
+            "skill_full": "approved procedures are full; remove an older entry",
+            "state_unsafe": "the state is corrupt or was replaced by a symbolic link",
+            "busy": "another Rondo process is updating project knowledge; try again shortly",
+            "human_only": "this action requires direct user approval"
+        },
         "proof_title": "Rondo Proof · {verdict}",
         "proof_ready": "approval candidate",
         "proof_review": "human review required",
@@ -937,15 +1012,23 @@ def clean_cache() -> int:
             path.unlink(missing_ok=True)
             removed += 1
 
-    for section in ("proof", "race", "relay", "test"):
+    for section in ("proof", "race", "relay", "test", "knowledge"):
         directory = CACHE_DIR / section
-        if not directory.is_dir():
+        if directory.is_symlink() or not directory.is_dir():
             continue
+        base = directory.resolve()
         for item in directory.iterdir():
             if not item.is_dir() or item.is_symlink():
                 continue
+            try:
+                if item.resolve().parent != base:
+                    continue
+            except OSError:
+                continue
             roots = []
             for state in item.glob("*.json"):
+                if state.is_symlink():
+                    continue
                 try:
                     value = json.loads(state.read_text())
                 except (OSError, ValueError, TypeError):
@@ -955,6 +1038,15 @@ def clean_cache() -> int:
                     roots.append(Path(root))
             empty = not any(item.iterdir())
             if empty or (roots and all(not root.exists() for root in roots)):
+                if directory.is_symlink() or item.is_symlink():
+                    continue
+                try:
+                    if item.resolve().parent != base:
+                        continue
+                except OSError:
+                    continue
+                if section == "knowledge":
+                    _invalidate_knowledge_guidance_key(item.name)
                 shutil.rmtree(item)
                 removed += 1
     print(t("cache_cleaned", count=removed))
@@ -1287,6 +1379,7 @@ def handoff_command(parts: list[str]) -> int:
     temp.replace(target)
     panels = read_setting("panels").split()
     suggested = next((name for name in panels if name in ("claude", "codex")), "codex")
+    record_event(root, "handoff", note, str(target))
     print(t("handoff_saved", path=target.relative_to(root), agent=suggested))
     return 0
 
@@ -1348,13 +1441,14 @@ def _command_options(
 def task_command(args: list[str]) -> int:
     from rondo import proof as proof_lib
 
+    root = repo_root()
     try:
         bare, values, _ = _command_options(
             args, {"--accept", "--avoid", "--scope", "--check"}
         )
         checks = [shlex.split(value, posix=not WINDOWS) for value in values["--check"]]
         task = proof_lib.record_task(
-            repo_root(),
+            root,
             " ".join(bare),
             acceptance=values["--accept"],
             must_not=values["--avoid"],
@@ -1369,6 +1463,189 @@ def task_command(args: list[str]) -> int:
         acceptance=len(task["acceptance"]),
         must_not=len(task["must_not"]),
     ))
+    record_event(root, "task", task["goal"])
+    return 0
+
+
+def _knowledge_failure(error) -> RuntimeError:
+    reasons = TEXT[LANGUAGE]["knowledge_errors"]
+    reason = reasons.get(getattr(error, "code", ""), str(error))
+    return RuntimeError(t("knowledge_error", reason=reason))
+
+
+def _invalidate_knowledge_guidance_key(key: str) -> None:
+    directory = CACHE_DIR / "audience"
+    if not re.fullmatch(r"[0-9a-f]{16}", key) or directory.is_symlink():
+        return
+    for path in directory.glob(f"kimi-*-{key}.md"):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _invalidate_knowledge_guidance(root: Path) -> None:
+    _invalidate_knowledge_guidance_key(repo_key(root))
+
+
+def record_event(root: Path, kind: str, summary: str, reference: str = "") -> None:
+    from rondo import knowledge as knowledge_lib
+
+    try:
+        knowledge_lib.record(root, kind, summary, reference)
+    except (knowledge_lib.KnowledgeError, OSError):
+        pass
+
+
+def _knowledge_require_user_terminal() -> None:
+    if os.environ.get("RONDO_AGENT") or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise RuntimeError(t("learn_human_only"))
+    if os.environ.get("ZELLIJ_SESSION_NAME", "").startswith("rondo-"):
+        pane_id = os.environ.get("ZELLIJ_PANE_ID", "")
+        try:
+            result = subprocess.run(
+                ["zellij", "action", "list-panes", "--json"],
+                capture_output=True, text=True, check=True, timeout=5,
+            )
+            panes = json.loads(result.stdout)
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
+            raise RuntimeError(t("learn_human_only")) from None
+        if not any(
+            str(pane.get("id")) == pane_id
+            and pane.get("tab_name") == "shell"
+            and not pane.get("is_plugin")
+            and not pane.get("exited")
+            and not str(pane.get("title", "")).casefold().startswith(
+                ("proof-", "review-", "test-", "race-")
+            )
+            for pane in panes
+        ):
+            raise RuntimeError(t("learn_human_only"))
+
+
+def _knowledge_confirm(prompt: str, checked: bool = False) -> bool:
+    if not checked:
+        _knowledge_require_user_terminal()
+    return input(prompt).strip().casefold() in {"y", "yes"}
+
+
+def _knowledge_label(item: dict) -> str:
+    return f" · {item['name']}" if item.get("name") else ""
+
+
+def _print_knowledge_item(item: dict, full: bool = False) -> None:
+    content = item.get("content", "")
+    if not full:
+        content = " ".join(content.split())[:120]
+    source = item.get("source", "-")
+    print(t(
+        "learn_candidate", id=item["id"], kind=item["kind"],
+        name=_knowledge_label(item), source=source, content=content,
+    ))
+
+
+def learn_command(args: list[str]) -> int:
+    from rondo import knowledge as knowledge_lib
+
+    root = repo_root()
+    require_git_repo(root)
+    action = args[0] if args else "list"
+    try:
+        if action == "memory" and len(args) >= 2:
+            item = knowledge_lib.propose(
+                root, "memory", " ".join(args[1:]),
+                source=os.environ.get("RONDO_AGENT") or "human",
+            )
+            print(t(
+                "learn_proposed", id=item["id"], kind=item["kind"], name="",
+                source=item["source"],
+            ))
+            return 0
+        if action == "skill" and len(args) >= 3:
+            item = knowledge_lib.propose(
+                root, "skill", " ".join(args[2:]), name=args[1],
+                source=os.environ.get("RONDO_AGENT") or "human",
+            )
+            print(t(
+                "learn_proposed", id=item["id"], kind=item["kind"],
+                name=_knowledge_label(item), source=item["source"],
+            ))
+            return 0
+        _knowledge_require_user_terminal()
+        if not args or args in (["list"], ["pending"]):
+            state = knowledge_lib.load(root)
+            shown = False
+            if action == "list" and (state["memories"] or state["skills"]):
+                print(t("learn_active"))
+                for item in [*state["memories"], *state["skills"]]:
+                    _print_knowledge_item(item)
+                shown = True
+            if state["pending"]:
+                print(t("learn_pending"))
+                for item in state["pending"]:
+                    _print_knowledge_item(item)
+                shown = True
+            if not shown:
+                print(t("learn_empty"))
+            return 0
+        if action == "show" and len(args) == 2:
+            try:
+                item = knowledge_lib.find_pending(root, args[1])
+            except knowledge_lib.KnowledgeError as error:
+                if error.code != "not_found":
+                    raise
+                item = knowledge_lib.find_active(root, args[1])
+            _print_knowledge_item(item, full=True)
+            return 0
+        if action in {"approve", "reject", "remove"} and len(args) == 2:
+            item = (
+                knowledge_lib.find_active(root, args[1])
+                if action == "remove"
+                else knowledge_lib.find_pending(root, args[1])
+            )
+            _print_knowledge_item(item, full=True)
+            prompt = t(f"learn_confirm_{action}")
+            if not _knowledge_confirm(prompt, checked=True):
+                print(t("race_cancelled"))
+                return 0
+            result = getattr(knowledge_lib, action)(root, args[1], actor="human")
+            if action in {"approve", "remove"}:
+                _invalidate_knowledge_guidance(root)
+            message = {"approve": "learn_approved", "reject": "learn_rejected", "remove": "learn_removed"}[action]
+            print(t(message, id=result["id"]))
+            return 0
+    except knowledge_lib.KnowledgeError as error:
+        raise _knowledge_failure(error) from None
+    raise RuntimeError(t("learn_usage"))
+
+
+def recall_command(args: list[str]) -> int:
+    from rondo import knowledge as knowledge_lib
+
+    root = repo_root()
+    require_git_repo(root)
+    if args and args[0].startswith("--") and (args[0] != "--id" or len(args) != 2):
+        raise RuntimeError(t("recall_usage"))
+    if "--id" in args and args[0] != "--id":
+        raise RuntimeError(t("recall_usage"))
+    try:
+        exact = args[1] if args and args[0] == "--id" else ""
+        query = "" if exact else " ".join(args).strip()
+        if len(query) > 200 or any(char in query for char in "\r\n\0"):
+            raise RuntimeError(t("recall_usage"))
+        items = knowledge_lib.recall(root, query=query, exact_id=exact)
+    except knowledge_lib.KnowledgeError as error:
+        raise _knowledge_failure(error) from None
+    print(t("recall_title"))
+    if not items:
+        print("  " + t("recall_empty"))
+        return 0
+    for item in items:
+        when = time.strftime("%Y-%m-%d", time.localtime(item.get("at", 0)))
+        label = f" · {item['name']}" if item.get("name") else ""
+        reference = f" · {item['reference']}" if item.get("reference") else ""
+        content = item["content"] if exact else " ".join(item["content"].split())[:240]
+        print(f"  {item['id']} · {item['kind']}{label} · {when}{reference}\n    {content}")
     return 0
 
 
@@ -1453,6 +1730,11 @@ def proof_command(args: list[str]) -> int:
         )
         print(f"    ! {item['label']}{f' · {details}' if details else ''}")
     print("  " + t("proof_packet", path=proof["packet"]))
+    record_event(
+        root, "proof",
+        f"{summary['verdict']} · {summary['files']} files · {summary['passed']} passed · {summary['failed']} unresolved",
+        proof["packet"],
+    )
 
     reviewers = values["--reviewer"]
     if reviewers and summary["verdict"] != "empty":
@@ -1791,6 +2073,7 @@ def test_command(args: list[str]) -> int:
                 raise RuntimeError(t("test_finish_pending", profiles=", ".join(pending)))
             _close_test_tab(run)
             result = testing_lib.finish(run)
+            record_event(root, "test", f"independent test {run.run_id} finished", result["summary"])
             print(t("test_finished", path=result["summary"]))
             failed = any(not item["report"] or item["violations"] for item in result["results"])
             failed = failed or bool(run.load and run.load.get("status") != "passed")
@@ -2101,6 +2384,7 @@ def race_command(args: list[str]) -> int:
             return 0
 
     race = race_lib.start(root, task, agents)
+    record_event(root, "race", f"{task} · agents {', '.join(agents)}")
     print(t("race_started", run=race.run_id, base=race.base[:8]))
     try:
         subprocess.run(["zellij", "action", "new-tab", "--layout-string", race_layout(race)],
@@ -2146,6 +2430,7 @@ def take_command(agent: str | None) -> int:
         print(t("race_missing"), file=sys.stderr)
         return 1
     result = race_lib.take(race, agent)
+    record_event(repo_root(), "race_take", f"{agent} · {'applied' if result['applied'] else 'no changes'}", result["patch"])
     print(t("race_taken" if result["applied"] else "race_empty_take", name=agent))
     return 0
 
@@ -2168,6 +2453,7 @@ def snap_command(label: str | None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     if not quiet:
+        record_event(root, "snapshot", label or "snapshot", snap.short)
         print(t("snap_done", sha=snap.short, count=len(undo_lib.snapshots(root))))
     return 0
 
@@ -2228,6 +2514,7 @@ def undo_command(args: list[str]) -> int:
     if not result["undone"]:
         print(t("undo_noop"))
         return 0
+    record_event(root, "undo", f"restored {result['target']} · previous {result['before']}")
     print(t("undo_done", target=result["target"], before=result["before"]))
     return 0
 
@@ -2262,6 +2549,10 @@ def main() -> int:
         resume_command(args[1] if len(args) > 1 else None)
     elif command == "task":
         return task_command(args[1:])
+    elif command == "learn":
+        return learn_command(args[1:])
+    elif command == "recall":
+        return recall_command(args[1:])
     elif command == "proof":
         return proof_command(args[1:])
     elif command == "review":
@@ -2300,7 +2591,7 @@ def main() -> int:
         return doctor("--deep" in args)
     elif command:
         known = [
-            "setup", "add", "send", "handoff", "resume", "task", "proof", "review",
+            "setup", "add", "send", "handoff", "resume", "task", "learn", "recall", "proof", "review",
             "git", "code-review", "test", "pr", "lens", "race", "diff", "take",
             "snap", "undo", "language", "audience", "relay", "continue", "doctor",
             "kill", "clean",

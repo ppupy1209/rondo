@@ -14,6 +14,7 @@ It provides:
 - one explanation level shared by every agent pane;
 - a shared status bar for models, usage, and relay state;
 - visible prompts between agent panes through `rondo send`;
+- human-approved project memory, reusable procedures, and work-history search;
 - element-scoped frontend requests through Rondo Lens;
 - executable evidence and a risk-based human review queue through Rondo Proof;
 - red-team, blue-team, reliability, and security tests physically separated from implementation sessions;
@@ -64,6 +65,8 @@ rondo setup       # change saved language, explanation, approval, agents, and re
 rondo audience    # change how every agent explains its results
 rondo add         # select and add another agent pane
 rondo send codex "Review the current diff"  # type and submit in the Codex pane
+rondo learn pending  # review project knowledge proposed by users and agents
+rondo recall "authentication"  # search approved knowledge, work history, and Git
 rondo lens        # click a UI element and send its focused context
 rondo proof       # run checks and build a risk-based review packet
 rondo test all --from codex --tester claude  # test outside the implementation session
@@ -130,6 +133,29 @@ rondo send gemini "Research another implementation approach"
 Run the command inside a Rondo session, with the target pane open. An agent can invoke the same command through its shell tool, so manual prompts, agent delegation, and automatic relay all use one visible input path.
 
 Before delivery, Rondo reads the pane screen and stops without pressing a key when it sees a trust, approval, or selection prompt. On a safe screen it pastes first, verifies that the message is visible in the input, and only then presses Enter. Rondo never approves folder trust on the user's behalf.
+
+## Human-approved project knowledge
+
+Rondo keeps durable repository facts and reusable procedures. Users and agents can both propose entries, but a proposal never appears in search results or agent launch guidance until a person approves it. Agents cannot read pending text through `list` or `show`, either.
+
+```sh
+rondo learn memory "Public API changes require a compatibility note"
+rondo learn skill release-check "Inspect the test report, then deploy only after user approval"
+rondo learn pending                 # list pending proposals
+rondo learn show a1b2c3d4           # inspect the full text
+rondo learn approve a1b2c3d4        # show it again, then require y/N
+rondo learn reject a1b2c3d4
+rondo learn remove a1b2c3d4         # remove an approved entry
+
+rondo recall "compatibility"        # search approved knowledge, Rondo events, and 100 recent commits
+rondo recall --id a1b2c3d4          # load one complete procedure by ID
+```
+
+Approved `memory` entries are shared with new agent sessions under a strict size budget. For each `skill`, agents receive only its name, ID, and first-line summary, then load the full procedure on demand with `rondo recall --id ...`. A procedure remains reference text; Rondo never activates it as a plugin or executable code. Already-open sessions can discover new entries through `rondo recall`.
+
+Approval, rejection, and removal require an interactive user terminal. Inside Rondo, the process must also be running in the `shell` tab. Agent panes, race tabs, pipes, and scripts are rejected. Each proposal is limited to 2,000 characters, approved memory to 4,000 characters total, and procedures to 16. Common secret, prompt-injection, and destructive-command patterns plus invisible control characters are rejected before storage. Concurrent agent writes are serialized by a repository lock, and corrupt or symbolic-link state files fail closed.
+
+History contains only short Rondo operation events and Git commit subjects; Rondo does not ingest raw Claude, Codex, or Gemini transcripts. Everything stays private under `~/.cache/rondo/knowledge/` without a network service. This is not a secret vault against a malicious process that already has the same operating-system user privileges, so never record tokens or passwords.
 
 ## Rondo Lens
 
@@ -344,6 +370,9 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
 | `rondo send <agent> <message>` | Type and submit a visible prompt in that agent's pane |
 | `rondo task <goal> [options]` | Record acceptance criteria, boundaries, scope, and checks |
+| `rondo learn memory\|skill ...` | Propose repository memory or a reusable procedure for approval |
+| `rondo learn pending\|show\|approve\|reject\|remove` | Manage the human-approved knowledge lifecycle |
+| `rondo recall [query\|--id ID]` | Search approved knowledge, operation events, and recent Git history |
 | `rondo proof [--reviewer agent]` | Run checks and build an independent review packet |
 | `rondo review [--budget 2m]` | Show the highest-risk human decisions within a time budget |
 | `rondo git [command]` | Manage Git connection and repository-local PR/reviewer policy |
@@ -391,13 +420,14 @@ The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/
   claude.*       local display cache
   lens/          private element context packets and cropped screenshots
   proof/         private task intent, evidence packets, and review queues
+  knowledge/     approved repository memory, procedures, and short operation events
   test/          isolated test state, reports, k6 results, and Grafana captures
   relay/         private continuity packets and delivery logs
 ```
 
 Repository-local `rondo.prPolicy` and `rondo.reviewers` values live in `.git/config`. For non-interactive setup, set `RONDO_LANG=ko|en`, `RONDO_AUDIENCE=default|nondev|guided`, `RONDO_APPROVAL=ask|workspace`, `RONDO_PANELS=claude,codex,...`, and `RONDO_RELAY=off|ready|auto` before running `rondo setup`.
 
-No telemetry is included. Rondo does not store credentials. A relay excerpt can contain conversation text, so use `ready` mode when work must not cross providers without an explicit action.
+No telemetry is included. Rondo does not store credentials or ingest raw agent transcripts to build project knowledge. A relay excerpt can contain conversation text, so use `ready` mode when work must not cross providers without an explicit action.
 
 ## Development
 

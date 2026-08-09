@@ -29,6 +29,11 @@ class RondoTests(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.config = self.base / "config"
         self.cache = self.base / "cache"
+        from rondo import knowledge as knowledge_lib
+        self.knowledge_cache = patch.object(
+            knowledge_lib, "CACHE", self.cache / "rondo"
+        )
+        self.knowledge_cache.start()
         self.output = io.StringIO()
         self.errors = io.StringIO()
         self.redirect = contextlib.redirect_stdout(self.output)
@@ -39,6 +44,7 @@ class RondoTests(unittest.TestCase):
     def tearDown(self):
         self.redirect_errors.__exit__(None, None, None)
         self.redirect.__exit__(None, None, None)
+        self.knowledge_cache.stop()
         self.temp.cleanup()
 
     def test_session_names_are_safe(self):
@@ -607,6 +613,116 @@ class RondoTests(unittest.TestCase):
         self.assertEqual(task["scope"], ["web"])
         self.assertEqual(task["checks"], [["python", "-m", "unittest"]])
 
+    def test_learn_command_keeps_agent_proposals_pending_until_user_approval(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        from rondo import knowledge as knowledge_lib
+
+        repo = self.base / "repo"
+        repo.mkdir()
+        scope = rondo["learn_command"].__globals__
+        with patch.object(knowledge_lib, "CACHE", self.cache / "rondo"):
+            with (
+                patch.dict(scope, {
+                    "repo_root": lambda: repo,
+                    "require_git_repo": lambda _root: None,
+                }),
+                patch.dict(scope["os"].environ, {"RONDO_AGENT": "codex"}, clear=False),
+            ):
+                self.assertEqual(
+                    rondo["learn_command"](["memory", "Use", "UTC", "timestamps."]), 0
+                )
+                pending = knowledge_lib.load(repo)["pending"][0]
+                with self.assertRaisesRegex(RuntimeError, "interactive terminal"):
+                    rondo["learn_command"](["pending"])
+
+            self.assertEqual(pending["source"], "codex")
+            self.assertEqual(knowledge_lib.load(repo)["memories"], [])
+            key = knowledge_lib.state_path(repo).parent.name
+            audience = scope["CACHE_DIR"] / "audience"
+            audience.mkdir(parents=True)
+            stale_guidance = audience / f"kimi-default-{key}.md"
+            stale_guidance.write_text("old project memory")
+            with patch.dict(scope, {
+                "repo_root": lambda: repo,
+                "require_git_repo": lambda _root: None,
+                "_knowledge_require_user_terminal": lambda: None,
+                "_knowledge_confirm": lambda _prompt, checked=False: True,
+            }):
+                self.assertEqual(rondo["learn_command"](["approve", pending["id"]]), 0)
+                self.assertEqual(rondo["recall_command"](["--id", pending["id"]]), 0)
+
+            self.assertIn("Use UTC timestamps.", self.output.getvalue())
+            self.assertFalse(stale_guidance.exists())
+            self.assertEqual(knowledge_lib.load(repo)["pending"], [])
+            self.assertEqual(len(knowledge_lib.load(repo)["memories"]), 1)
+
+    def test_knowledge_decisions_require_a_user_terminal_or_shell_tab(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        confirm = rondo["_knowledge_confirm"]
+        scope = confirm.__globals__
+        stdin = unittest.mock.Mock()
+        stdout = unittest.mock.Mock()
+        stdin.isatty.return_value = True
+        stdout.isatty.return_value = True
+
+        with (
+            patch.object(scope["sys"], "stdin", stdin),
+            patch.object(scope["sys"], "stdout", stdout),
+            patch.dict(scope["os"].environ, {"RONDO_AGENT": "codex"}, clear=True),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "interactive terminal"):
+                confirm("approve? ")
+
+        agent_pane = subprocess.CompletedProcess(
+            [], 0, json.dumps([{"id": 7, "tab_name": "agents"}]), ""
+        )
+        environment = {"ZELLIJ_SESSION_NAME": "rondo-project", "ZELLIJ_PANE_ID": "7"}
+        with (
+            patch.object(scope["sys"], "stdin", stdin),
+            patch.object(scope["sys"], "stdout", stdout),
+            patch.dict(scope["os"].environ, environment, clear=True),
+            patch.object(scope["subprocess"], "run", return_value=agent_pane),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "interactive terminal"):
+                confirm("approve? ")
+
+        proof_pane = subprocess.CompletedProcess(
+            [], 0, json.dumps([{
+                "id": 7, "tab_name": "shell", "title": "proof-codex"
+            }]), ""
+        )
+        with (
+            patch.object(scope["sys"], "stdin", stdin),
+            patch.object(scope["sys"], "stdout", stdout),
+            patch.dict(scope["os"].environ, environment, clear=True),
+            patch.object(scope["subprocess"], "run", return_value=proof_pane),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "interactive terminal"):
+                confirm("approve? ")
+
+        shell_pane = subprocess.CompletedProcess(
+            [], 0, json.dumps([{"id": 7, "tab_name": "shell"}]), ""
+        )
+        with (
+            patch.object(scope["sys"], "stdin", stdin),
+            patch.object(scope["sys"], "stdout", stdout),
+            patch.dict(scope["os"].environ, environment, clear=True),
+            patch.object(scope["subprocess"], "run", return_value=shell_pane),
+            patch("builtins.input", return_value="yes"),
+        ):
+            self.assertTrue(confirm("approve? "))
+
+        external_zellij = {"ZELLIJ_SESSION_NAME": "personal-workspace"}
+        with (
+            patch.object(scope["sys"], "stdin", stdin),
+            patch.object(scope["sys"], "stdout", stdout),
+            patch.dict(scope["os"].environ, external_zellij, clear=True),
+            patch.object(scope["subprocess"], "run") as run,
+            patch("builtins.input", return_value="yes"),
+        ):
+            self.assertTrue(confirm("approve? "))
+        run.assert_not_called()
+
     def test_audience_mode_is_saved_and_broadcast_to_open_panes(self):
         rondo = load_script("rondo", self.config, self.cache)
         rondo["write_setting"]("panels", "claude codex")
@@ -723,11 +839,39 @@ class RondoTests(unittest.TestCase):
         live = cache / "proof" / "live"
         live.mkdir(parents=True)
         (live / "latest.json").write_text(json.dumps({"root": str(self.base)}))
+        stale_key = "a" * 16
+        stale_knowledge = cache / "knowledge" / stale_key
+        stale_knowledge.mkdir(parents=True)
+        (stale_knowledge / "state.json").write_text(json.dumps({"root": str(missing)}))
+        audience = cache / "audience"
+        audience.mkdir()
+        stale_guidance = audience / f"kimi-default-{stale_key}.md"
+        stale_guidance.write_text("private memory")
 
-        self.assertEqual(rondo["clean_cache"](), 2)
+        self.assertEqual(rondo["clean_cache"](), 3)
         self.assertFalse((cache / "claude.dead.json").exists())
         self.assertFalse(stale.exists())
+        self.assertFalse(stale_knowledge.exists())
+        self.assertFalse(stale_guidance.exists())
         self.assertTrue(live.exists())
+
+    @unittest.skipIf(os.name == "nt", "creating symbolic links may require Windows privileges")
+    def test_clean_never_follows_a_cache_section_symbolic_link(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        cache = rondo["CACHE_DIR"]
+        cache.mkdir(parents=True)
+        outside = self.base / "outside"
+        child = outside / ("b" * 16)
+        child.mkdir(parents=True)
+        sentinel = child / "sentinel.txt"
+        sentinel.write_text("keep")
+        (child / "state.json").write_text(json.dumps({
+            "root": str(self.base / "deleted")
+        }))
+        (cache / "knowledge").symlink_to(outside, target_is_directory=True)
+
+        self.assertEqual(rondo["clean_cache"](), 0)
+        self.assertTrue(sentinel.exists())
 
     def test_pr_without_origin_reports_the_missing_remote(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -771,8 +915,15 @@ class AgentSessionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name)
         self.runner = load_script("rondo-agent-session", self.base / "config", self.base / "cache")
+        from rondo import knowledge as knowledge_lib
+        self.knowledge = knowledge_lib
+        self.knowledge_cache = patch.object(
+            knowledge_lib, "CACHE", self.base / "cache" / "rondo"
+        )
+        self.knowledge_cache.start()
 
     def tearDown(self):
+        self.knowledge_cache.stop()
         self.temp.cleanup()
 
     def test_claude_resumes_and_falls_back_when_no_session_exists(self):
@@ -836,6 +987,53 @@ class AgentSessionTests(unittest.TestCase):
         self.assertIn("${base_prompt}", agent_file.read_text())
         if os.name != "nt":
             self.assertEqual(agent_file.stat().st_mode & 0o777, 0o600)
+
+    def test_only_approved_knowledge_reaches_agent_native_entry_points(self):
+        memory = self.knowledge.propose(
+            self.base, "memory", "Public APIs require a compatibility note.",
+            source="codex",
+        )
+        skill = self.knowledge.propose(
+            self.base,
+            "skill",
+            "Run the release checks first.\nNever auto-include PRIVATE_SECOND_STEP.",
+            name="release-check",
+            source="claude",
+        )
+        before = " ".join(self.runner["session_commands"](
+            "codex", "default", root=self.base
+        )[1])
+        self.assertNotIn("compatibility note", before)
+
+        self.knowledge.approve(self.base, memory["id"], actor="human")
+        self.knowledge.approve(self.base, skill["id"], actor="human")
+        for agent in ("claude", "codex", "gemini", "kimi", "grok"):
+            resume, fresh, _ = self.runner["session_commands"](
+                agent, "default", root=self.base
+            )
+            command = " ".join(resume or fresh)
+            if agent == "kimi":
+                command = Path(fresh[fresh.index("--agent-file") + 1]).read_text()
+            self.assertIn("compatibility note", command)
+            self.assertIn("Run the release checks first.", command)
+            self.assertNotIn("PRIVATE_SECOND_STEP", command)
+
+        other = self.base / "other-repo"
+        other.mkdir()
+        other_memory = self.knowledge.propose(
+            other, "memory", "This repository uses a separate release train."
+        )
+        self.knowledge.approve(other, other_memory["id"], actor="human")
+        first_fresh = self.runner["session_commands"](
+            "kimi", "default", root=self.base
+        )[1]
+        other_fresh = self.runner["session_commands"](
+            "kimi", "default", root=other
+        )[1]
+        first_file = Path(first_fresh[first_fresh.index("--agent-file") + 1])
+        other_file = Path(other_fresh[other_fresh.index("--agent-file") + 1])
+        self.assertNotEqual(first_file, other_file)
+        self.assertNotIn("compatibility note", other_file.read_text())
 
     def test_workspace_approval_uses_each_cli_native_mode(self):
         commands = self.runner["session_commands"]

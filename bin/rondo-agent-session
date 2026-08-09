@@ -13,7 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from rondo import approval, audience
+from rondo import approval, audience, knowledge
+from rondo.paths import repo_key
 
 AGENTS = {"claude", "codex", "gemini", "kimi", "grok"}
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
@@ -39,10 +40,14 @@ def handoff_prompt(agent: str) -> str | None:
     return f"[Rondo resume] Read this handoff file and continue the current work: {path}"
 
 
-def kimi_agent_file(mode: str, rule: str) -> Path:
+def kimi_agent_file(mode: str, rule: str, root: Path) -> Path:
     directory = CACHE_DIR / "audience"
+    if directory.is_symlink():
+        raise OSError("unsafe Rondo audience cache")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    target = directory / f"kimi-{mode}.md"
+    os.chmod(directory, 0o700)
+    key = repo_key(root)
+    target = directory / f"kimi-{mode}-{key}.md"
     content = (
         "---\n"
         f"name: rondo-{mode}\n"
@@ -51,17 +56,39 @@ def kimi_agent_file(mode: str, rule: str) -> Path:
         "${base_prompt}\n\n"
         f"{rule}\n"
     )
-    temp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
-    temp.write_text(content, encoding="utf-8")
-    os.chmod(temp, 0o600)
-    temp.replace(target)
+    for old in directory.glob(f"kimi-*-{key}.md"):
+        if old != target:
+            old.unlink(missing_ok=True)
+    if target.is_symlink():
+        target.unlink()
+    temp = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(temp, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp.replace(target)
+    finally:
+        temp.unlink(missing_ok=True)
     return target
 
 
 def session_commands(
-    agent: str, mode: str, approval_mode: str | None = None
+    agent: str, mode: str, approval_mode: str | None = None, root: Path | None = None
 ) -> tuple[list[str] | None, list[str], list[str] | None]:
-    rule = audience.instruction(mode)
+    root = root or Path.cwd()
+    language = os.environ.get("RONDO_LANG", "").lower()
+    if language not in {"ko", "en"}:
+        try:
+            language = (CONFIG_DIR / "language").read_text(encoding="utf-8").strip()
+        except OSError:
+            language = "en"
+    rule = " ".join(filter(None, (
+        audience.instruction(mode),
+        knowledge.guidance(root, language),
+    )))
     git_policy = os.environ.get("RONDO_GIT_POLICY", "direct")
     if git_policy in ("pr", "review"):
         review = " Require independent agent review before merge." if git_policy == "review" else ""
@@ -84,15 +111,15 @@ def session_commands(
         )
         return ["codex", *permissions, *guidance, "resume", "--last"], ["codex", *permissions, *guidance], None
     if agent == "gemini":
-        guidance = ["--prompt-interactive", audience.update_prompt(mode)] if rule else []
-        if rule and git_policy in ("pr", "review"):
-            guidance = ["--prompt-interactive", rule]
+        guidance = ["--prompt-interactive", rule] if rule else []
         return None, ["agy", *permissions, *guidance], None
     if agent == "grok":
         guidance = ["--rules", rule] if rule else []
         return None, ["grok", *permissions, *guidance], None
     if rule:
-        return None, ["kimi", *permissions, "--agent-file", str(kimi_agent_file(mode, rule))], ["kimi", *permissions]
+        return None, [
+            "kimi", *permissions, "--agent-file", str(kimi_agent_file(mode, rule, root))
+        ], ["kimi", *permissions]
     return None, ["kimi", *permissions], None
 
 
@@ -127,4 +154,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except knowledge.KnowledgeError as error:
+        if os.environ.get("RONDO_LANG") == "ko":
+            message = "프로젝트 지식 상태가 안전하지 않아 에이전트를 시작하지 않았습니다"
+        else:
+            message = "project knowledge is unsafe; the agent was not started"
+        print(f"rondo: {message} ({error.code})", file=sys.stderr)
+        raise SystemExit(1)
