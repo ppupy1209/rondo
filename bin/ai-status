@@ -34,6 +34,7 @@ GEMINI_REFRESH = 600  # agy 호출이 8초쯤 걸려 자주 못 돈다
 AGY_DIR = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
 BAR_CELLS = 8
 STALE_SECONDS = 3600
+STALE_LIMITS = 120  # 이 초를 넘으면 한도 옆에 나이를 붙인다
 INTERVAL = 5
 
 # 읽기에 실패한 틱에서 값이 사라지지 않도록 마지막 성공값을 들고 있는다.
@@ -95,18 +96,25 @@ def until(epoch):
 
 def claude_limits():
     """사용 한도는 계정 단위다. 어느 프로젝트에서 받았든 공유 파일에서 읽는다.
-    리셋 시각이 지난 창은 버린다."""
+
+    Claude Code 가 statusLine 을 그릴 때만 갱신되므로, 패널이 놀고 있으면 값이 낡는다.
+    (한도, 캐시가 쓰인 뒤 흐른 초) 를 돌려주고 낡으면 화면에 나이를 붙인다.
+    """
     try:
         with open(LIMITS) as fh:
-            limits = json.load(fh).get("rate_limits") or {}
+            cached = json.load(fh)
     except (OSError, ValueError):
-        return {}
+        return {}, 0
     now = time.time()
-    return {k: v for k, v in limits.items() if v.get("resets_at", 0) > now}
+    limits = {
+        k: v for k, v in (cached.get("rate_limits") or {}).items()
+        if v.get("resets_at", 0) > now
+    }
+    return limits, now - cached.get("at", now)
 
 
 def claude_field(root):
-    limits = claude_limits()
+    limits, age = claude_limits()
     try:
         with open(os.path.join(CACHE, "claude.%s.json" % os.path.basename(root))) as fh:
             data = json.load(fh)
@@ -122,6 +130,9 @@ def claude_field(root):
         if window:
             bar, left = battery(window["used_percentage"])
             bits.append(f"{label} {bar} {left:.0f}%({until(window['resets_at'])})")
+    # 실제 잔량과 어긋나 보일 수 있으니 값이 낡았으면 언제 기준인지 밝힌다
+    if limits and age > STALE_LIMITS:
+        bits.append("%dm전" % (age // 60))
     return " ".join(bits) or None
 
 

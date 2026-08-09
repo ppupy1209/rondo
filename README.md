@@ -170,7 +170,15 @@ Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. �
 
 ## `ai-status` — 상단 통합 바
 
-`ai` 세션 최상단 1행. 5초마다 갱신. **열려 있는 패널만** 표시한다 — `zellij action dump-layout` 의 패널 이름을 읽어 거른다.
+`ai` 세션 최상단 1행. 화면은 5초마다 다시 그리지만, **값의 신선도는 출처마다 다르다.**
+
+| 값 | 언제 갱신되나 |
+|---|---|
+| Codex 모델·한도 | 매 틱(5초). rollout 로그를 바로 읽는다 |
+| Gemini 모델 | 매 틱. 한도는 10분마다 `agy -p "/usage"` |
+| **Claude 한도** | **Claude Code 가 statusLine 을 그릴 때만.** 패널이 놀고 있으면 갱신되지 않는다 |
+
+Claude 한도는 CLI 가 statusLine 으로 넘겨줄 때만 받을 수 있다. 그 패널에서 대화를 하고 있으면 응답마다 갱신되고, 가만히 두면 마지막 값이 그대로 남는다. 그래서 값이 2분 넘게 낡으면 `6m전` 처럼 **언제 기준인지 붙여서** 표시한다. 실제 잔량과 어긋나 보이면 그 표시를 확인할 것. **열려 있는 패널만** 표시한다 — `zellij action dump-layout` 의 패널 이름을 읽어 거른다.
 
 ```
 claude Sonnet 5 5h ▓░░░░░░░ 10%(1h53m) wk ▓▓▓▓▓░░░ 62%(1d6h)   codex gpt-5.6-sol xhigh wk ▓▓▓▓▓▓▓░ 93%(6d20h)   gemini gemini-3.6-flash-high 5h ▓▓▓▓▓▓▓▓ 100%(4h29m) wk ▓▓▓▓▓▓▓▓ 99%(1d4h)
