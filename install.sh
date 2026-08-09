@@ -82,6 +82,17 @@ for path, agent in zip(sys.argv[1:], ("Claude", "Gemini")):
         changed = True
         print("hook  %-6s SessionEnd 등록" % agent)
 
+    # 턴 직전 자동 스냅샷. 수동 rondo snap 은 아무도 안 치므로 이게 undo 의 실제 입구다.
+    # 이 훅의 stdout 은 모델 컨텍스트에 들어갈 수 있어 --auto 는 아무것도 출력하지 않는다.
+    snap = {"type": "command", "command": "rondo snap --auto"}
+    prompts = cfg.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+    if any(snap in group.get("hooks", []) for group in prompts):
+        print("snap  %-6s 이미 등록됨" % agent)
+    else:
+        prompts.append({"hooks": [snap]})
+        changed = True
+        print("snap  %-6s UserPromptSubmit 등록" % agent)
+
     # Keep custom status lines. The legacy command is a compatibility alias.
     if agent == "Claude":
         if cfg.get("statusLine"):

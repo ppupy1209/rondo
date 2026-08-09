@@ -14,24 +14,15 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .gitcmd import GitError, git
 from .paths import CACHE, atomic_json, read_json, repo_key
 
 BRANCH_PREFIX = "rondo/race"
 DEFAULT_THRESHOLD = 10.0  # 남은 한도가 이 % 미만이면 참가시키지 않는다
 
 
-class RaceError(Exception):
-    """사용자에게 그대로 보여줄 수 있는 실패."""
-
-
-def git(root: Path | str, *args: str, check: bool = True) -> str:
-    done = subprocess.run(
-        ["git", "-C", str(root), *args],
-        capture_output=True, text=True, timeout=120,
-    )
-    if check and done.returncode != 0:
-        raise RaceError(f"git {' '.join(args)}: {done.stderr.strip() or done.stdout.strip()}")
-    return done.stdout
+# race 가 던지는 오류와 git 오류를 호출부에서 구분할 이유가 없다.
+RaceError = GitError
 
 
 @dataclass

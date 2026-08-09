@@ -107,7 +107,7 @@ Lens launches an isolated Chrome, Chromium, or Microsoft Edge profile and delete
 
 ## How it works
 
-1. `rondo` resolves the current Git root and maps it to one zellij session.
+1. `rondo` resolves the current Git root and keys one zellij session by its `origin` URL plus the local clone path.
 2. It builds a layout from `~/.config/rondo/panels` and launches each native CLI in the same working tree.
 3. `rondo-status` reads local CLI state every five seconds and renders only the panes that are open.
 4. `rondo send` targets a pane by its Rondo name and submits a visible prompt through zellij.

@@ -187,3 +187,52 @@ tests/test_race.py    임시 레포로 전 과정
 - take 후 worktree·브랜치가 사라진다
 - abort 가 전부 지우고 patch 는 남긴다
 - 원본이 그 사이 바뀌었을 때 `apply -3` 가 충돌을 알린다
+
+---
+
+# rondo undo — 한 걸음 되돌리기
+
+각 CLI 에도 rewind 가 있지만 **자기 턴만** 안다. 여러 에이전트가 같은 트리를 만졌을 때
+되돌릴 수 있는 건 워크스페이스를 소유한 Rondo 뿐이다.
+
+```sh
+rondo snap [라벨]      지금 상태를 스냅샷
+rondo undo             마지막 스냅샷 시점으로 작업 트리 복구
+rondo undo --list      스냅샷 목록
+rondo undo 2           두 단계 전으로
+```
+
+## 스냅샷
+
+`git stash create` 는 untracked 를 안 담는다. 에이전트는 새 파일을 계속 만들므로 못 쓴다.
+대신 **임시 인덱스**로 커밋 객체만 만든다 — 진짜 인덱스도, 작업 트리도, 브랜치도 안 건드린다.
+
+```
+GIT_INDEX_FILE=<임시> git add -A     # .gitignore 는 존중
+git write-tree | git commit-tree -p HEAD
+git update-ref refs/rondo/snap/<ns>  # gc 방지. 로컬 전용이라 push 안 됨
+```
+
+최근 20개만 남기고 오래된 ref 는 지운다.
+
+## 되돌리기
+
+스냅샷 트리로 강제 체크아웃하지 않는다 — 그러면 그 뒤에 생긴 파일이 남는다.
+지금 상태도 스냅샷으로 굳힌 뒤 **두 스냅샷의 diff 를 역적용**한다. 생성·삭제·수정이 다 잡힌다.
+
+되돌리기 직전 상태도 스냅샷으로 남으므로 **undo 를 다시 undo 할 수 있다.**
+
+**커밋은 건드리지 않는다.** 작업 트리만 되돌린다. 에이전트가 커밋까지 했다면 커밋은 그대로 두고
+작업 트리만 복구된다.
+
+## 자동 스냅샷
+
+수동 `rondo snap` 은 아무도 안 친다. `install.sh` 가 Claude 와 Gemini 의
+`UserPromptSubmit` 훅에 `rondo snap --auto` 를 등록한다 — 프롬프트를 보낼 때마다 직전 상태가
+남는다.
+
+`--auto` 는 **아무것도 출력하지 않고 실패해도 0 을 돌려준다.** Claude 의 UserPromptSubmit
+훅 stdout 은 모델 컨텍스트로 들어가고, 스냅샷 실패가 사용자의 턴을 막아서는 안 된다.
+
+Codex 는 `~/.codex/hooks/hooks.json` 스키마를 확인하지 못해 아직 자동 등록하지 않는다.
+kimi·grok 도 마찬가지다. 그쪽 패널에서 작업할 때는 `rondo snap` 을 직접 치면 된다.

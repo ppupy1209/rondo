@@ -41,7 +41,24 @@ class RondoTests(unittest.TestCase):
         scope = rondo["repo_root"].__globals__
         with patch.object(scope["subprocess"], "run", side_effect=FileNotFoundError):
             self.assertEqual(rondo["repo_root"](), Path.cwd())
-        self.assertEqual(rondo["rondo_session_name"]("my-project"), "rondo-my-project")
+
+    def test_session_name_uses_origin_and_local_clone(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["rondo_session_name"].__globals__
+        company = self.base / "company" / "backend"
+        personal = self.base / "personal" / "backend"
+        copy = self.base / "copy" / "backend"
+        origins = {
+            company: "git@github.com:company/backend.git",
+            personal: "git@github.com:me/backend.git",
+            copy: "git@github.com:company/backend.git",
+        }
+        with patch.dict(scope, {"git_origin": lambda root: origins[root]}):
+            names = [rondo["rondo_session_name"](root) for root in origins]
+            self.assertEqual(names[0], rondo["rondo_session_name"](company))
+        self.assertEqual(len(set(names)), 3)
+        self.assertTrue(all(name.startswith("rondo-backend-") for name in names))
+        self.assertTrue(all(len(name) <= 80 for name in names))
 
     def test_exited_zellij_sessions_are_not_treated_as_active(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -62,6 +79,7 @@ class RondoTests(unittest.TestCase):
                 scope,
                 {
                     "repo_root": lambda: Path("/tmp/project"),
+                    "rondo_session_name": lambda _root, _custom=None: "rondo-project",
                     "zellij_sessions": lambda: (set(), {"rondo-project"}),
                     "installed": lambda _name: True,
                     "write_layout": lambda _panels: Path("/tmp/layout.kdl"),

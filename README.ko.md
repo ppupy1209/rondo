@@ -107,7 +107,7 @@ Lens는 격리된 Chrome, Chromium 또는 Microsoft Edge 프로필을 열고 선
 
 ## 동작 방식
 
-1. `rondo`가 현재 Git 루트를 찾아 프로젝트별 zellij 세션 하나에 연결합니다.
+1. `rondo`가 현재 Git 루트를 찾고 `origin` 주소와 로컬 clone 경로를 조합해 프로젝트별 zellij 세션 하나에 연결합니다.
 2. `~/.config/rondo/panels`에 저장된 선택으로 레이아웃을 만들고, 같은 작업 트리에서 각 CLI를 실행합니다.
 3. `rondo-status`가 5초마다 로컬 CLI 상태를 읽어 실제로 열린 패널만 표시합니다.
 4. `rondo send`가 Rondo 패널 이름으로 대상을 찾아 zellij를 통해 보이는 요청을 전달합니다.

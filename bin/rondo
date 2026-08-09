@@ -49,6 +49,8 @@ TEXT = {
   rondo race "<과제>"   같은 과제를 여러 에이전트에게 각자 worktree 에서
   rondo diff [에이전트]  race 결과 비교
   rondo take <에이전트>  race 결과 채택
+  rondo snap [라벨]      지금 작업 트리를 스냅샷
+  rondo undo [--list]    에이전트가 바꾼 작업 트리 되돌리기
   rondo language        한국어 / English 변경
   rondo relay [모드]    Claude → Codex 인계 상태 / 모드 변경
   rondo continue        준비된 인계를 Codex에서 계속
@@ -110,6 +112,11 @@ TEXT = {
         "race_taken": "{name} 결과를 원본 트리에 얹었습니다. 커밋은 직접 하세요.",
         "race_empty_take": "{name} 은(는) 바꾼 것이 없습니다. race 만 정리했습니다.",
         "take_usage": "사용법: rondo take <에이전트>",
+        "snap_done": "스냅샷 {sha} · 남아 있는 스냅샷 {count}개",
+        "undo_none": "되돌릴 스냅샷이 없습니다. rondo snap 으로 먼저 남기세요.",
+        "undo_done": "{target} 시점으로 작업 트리를 되돌렸습니다. 직전 상태는 {before} 에 있습니다 (rondo undo 로 복귀).",
+        "undo_noop": "스냅샷 이후 바뀐 것이 없습니다.",
+        "undo_list": "스냅샷 (최신 먼저)",
         "doctor_unknown_version": "버전 확인 불가",
         "doctor_changed": "벤더 업데이트로 깨진 항목",
         "select_auto_no_codex": "자동 인계에는 선택된 Codex 패널과 CLI가 필요합니다.",
@@ -189,6 +196,11 @@ Inside a session
         "race_taken": "Applied {name} to the working tree. Commit it yourself.",
         "race_empty_take": "{name} changed nothing. Cleaned up the race.",
         "take_usage": "Usage: rondo take <agent>",
+        "snap_done": "Snapshot {sha} · {count} kept",
+        "undo_none": "No snapshot to roll back to. Run `rondo snap` first.",
+        "undo_done": "Working tree rolled back to {target}. The previous state is {before} (run `rondo undo` again to return).",
+        "undo_noop": "Nothing changed since the snapshot.",
+        "undo_list": "Snapshots (newest first)",
         "doctor_unknown_version": "version unknown",
         "doctor_changed": "Broken by a vendor update",
         "select_auto_no_codex": "Automatic relay requires a selected Codex pane and CLI.",
@@ -419,8 +431,27 @@ def safe_session_name(value: str) -> str:
     return name[:80] or "rondo"
 
 
-def rondo_session_name(value: str) -> str:
-    return safe_session_name(f"rondo-{value}")
+def git_origin(root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    value = result.stdout.strip().rstrip("/") if result.returncode == 0 else ""
+    value = re.sub(r"^(https?://)[^/@]+@", r"\1", value, flags=re.I)
+    return value[:-4] if value.endswith(".git") else value
+
+
+def rondo_session_name(root: Path, custom_name: str | None = None) -> str:
+    identity = f"{git_origin(root) or 'local'}\0{root.resolve()}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
+    label = safe_session_name(custom_name or root.name)
+    label = label[: 80 - len("rondo--") - len(digest)]
+    return f"rondo-{label}-{digest}"
 
 
 def parse_session_list(value: str) -> tuple[set[str], set[str]]:
@@ -490,7 +521,7 @@ def open_session(custom_name: str | None = None) -> None:
     if shutil.which("zellij") is None:
         raise RuntimeError(t("not_installed", name="zellij"))
     root = repo_root()
-    name = rondo_session_name(custom_name or root.name)
+    name = rondo_session_name(root, custom_name)
     active, exited = zellij_sessions()
     if name in active:
         os.execvp("zellij", ["zellij", "attach", name])
@@ -893,6 +924,63 @@ def take_command(agent: str | None) -> int:
     return 0
 
 
+def snap_command(label: str | None) -> int:
+    """--auto 는 훅에서 온 것이다. 아무것도 출력하지 않고, 실패해도 턴을 막지 않는다.
+
+    (Claude 의 UserPromptSubmit 훅은 stdout 을 모델 컨텍스트에 넣는다.)
+    """
+    from rondo import undo as undo_lib
+    from rondo.gitcmd import GitError
+
+    quiet = label == "--auto"
+    try:
+        root = repo_root()
+        snap = undo_lib.snapshot(root, "" if quiet else (label or ""))
+    except (GitError, OSError) as exc:
+        if quiet:
+            return 0
+        print(str(exc), file=sys.stderr)
+        return 1
+    if not quiet:
+        print(t("snap_done", sha=snap.short, count=len(undo_lib.snapshots(root))))
+    return 0
+
+
+def undo_command(args: list[str]) -> int:
+    from rondo import undo as undo_lib
+    from rondo.gitcmd import GitError
+
+    root = repo_root()
+    history = undo_lib.snapshots(root)
+    if "--list" in args:
+        if not history:
+            print(t("undo_none"))
+            return 0
+        print(t("undo_list"))
+        for snap in history:
+            when = time.strftime("%m-%d %H:%M", time.localtime(snap.at))
+            print(f"  {snap.short}  {when}  {snap.label}")
+        return 0
+
+    if not history:
+        print(t("undo_none"), file=sys.stderr)
+        return 1
+    steps = 1
+    for value in args:
+        if value.isdigit():
+            steps = int(value)
+    try:
+        result = undo_lib.undo(root, steps)
+    except GitError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if not result["undone"]:
+        print(t("undo_noop"))
+        return 0
+    print(t("undo_done", target=result["target"], before=result["before"]))
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
     command = args[0] if args else ""
@@ -916,6 +1004,10 @@ def main() -> int:
         return diff_command(args[1] if len(args) > 1 else None)
     elif command == "take":
         return take_command(args[1] if len(args) > 1 else None)
+    elif command == "snap":
+        return snap_command(args[1] if len(args) > 1 else None)
+    elif command == "undo":
+        return undo_command(args[1:])
     elif command in ("language", "lang"):
         change_language()
     elif command == "relay":
