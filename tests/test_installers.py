@@ -20,6 +20,7 @@ class InstallerContractTest(unittest.TestCase):
             self.assertNotIn(".zip.sha256sum", source)
         self.assertIn("b6acf83a7739cf5f0f4e9bd47709642d4d98acbbf8c34d4a12c6e706f531da61", shell)
         self.assertIn("45f25febb588d36f499232b3ba80a9edcde3b3a2a85bebb105a82457b0ca6aef", powershell)
+        self.assertIn('[ -f "$f" ] && [ ! -L "$f" ] || continue', shell)
 
     def test_release_job_publishes_both_platform_archives_and_checksums(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text()

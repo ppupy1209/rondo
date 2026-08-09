@@ -78,7 +78,21 @@ def _connect(root: Path) -> sqlite3.Connection:
         connection = sqlite3.connect(target, timeout=5)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("PRAGMA journal_mode = WAL")
+        # WAL negotiation takes an exclusive lock even though normal SQLite
+        # writes honor busy_timeout. Fresh concurrent Rondo processes can all
+        # arrive here before the first one finishes initialization, so retry
+        # this pragma explicitly instead of misclassifying a transient lock as
+        # corrupt state.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                connection.execute("PRAGMA journal_mode = WAL")
+                break
+            except sqlite3.OperationalError as error:
+                locked = any(word in str(error).casefold() for word in ("locked", "busy"))
+                if not locked or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.025)
         connection.execute("PRAGMA synchronous = NORMAL")
         connection.executescript(
             """
@@ -145,7 +159,11 @@ def _connect(root: Path) -> sqlite3.Connection:
     except sqlite3.Error as error:
         if connection is not None:
             connection.close()
-        raise JournalError("state_unsafe") from error
+        code = (
+            "busy" if any(word in str(error).casefold() for word in ("locked", "busy"))
+            else "state_unsafe"
+        )
+        raise JournalError(code) from error
 
 
 def _clean_label(value: str) -> str:

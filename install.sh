@@ -247,6 +247,7 @@ PY
 fi
 
 for f in "$repo"/bin/*; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
     ln -sfn "$f" "$BIN/$(basename "$f")"
     echo "link  $BIN/$(basename "$f")"
 done

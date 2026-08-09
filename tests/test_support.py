@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+import sys
 import zipfile
 from pathlib import Path
 
-from rondo import support
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from rondo import support  # noqa: E402
 
 
 class SupportTest(unittest.TestCase):
@@ -35,7 +38,8 @@ class SupportTest(unittest.TestCase):
                 installation={"managed": True, "version": "0.12.0"},
             )
             target = support.create(base / "support", value)
-            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(target.stat().st_mode & 0o777, 0o600)
             with zipfile.ZipFile(target) as archive:
                 self.assertEqual(sorted(archive.namelist()), ["README.txt", "report.json"])
                 raw = archive.read("report.json").decode()

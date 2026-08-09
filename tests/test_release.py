@@ -6,10 +6,12 @@ import json
 import os
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 from unittest import mock
 
-from rondo import release
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from rondo import release  # noqa: E402
 
 
 class Response(io.BytesIO):
