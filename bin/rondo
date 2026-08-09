@@ -30,7 +30,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.12.1"
+VERSION = "0.12.2"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56

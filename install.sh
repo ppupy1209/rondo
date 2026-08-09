@@ -85,7 +85,10 @@ with tarfile.open(archive, "r:gz") as package:
             raise SystemExit("unsafe Rondo archive")
         if not (member.isdir() or member.isfile()):
             raise SystemExit("unsupported Rondo archive entry")
-    package.extractall(destination, members=members)
+    if hasattr(tarfile, "data_filter"):
+        package.extractall(destination, members=members, filter="data")
+    else:
+        package.extractall(destination, members=members)
 PY
     set -- "$extracted"/*
     if [ "$#" -ne 1 ] || [ ! -d "$1" ] || [ -L "$1" ]; then
