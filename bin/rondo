@@ -14,7 +14,7 @@ import termios
 import tty
 from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
@@ -37,6 +37,7 @@ TEXT = {
   rondo add [에이전트]   현재 세션에 패널 추가
   rondo send <에이전트> <메시지>
                         대상 패널에 메시지 입력·전송
+  rondo lens [URL]      화면 요소를 클릭해 해당 맥락만 전달
   rondo language        한국어 / English 변경
   rondo relay [모드]    Claude → Codex 인계 상태 / 모드 변경
   rondo continue        준비된 인계를 Codex에서 계속
@@ -98,6 +99,7 @@ TEXT = {
   rondo add [agent]     Add a pane to the current session
   rondo send <agent> <message>
                         Type and submit a message in an agent pane
+  rondo lens [URL]      Click a UI element and send its focused context
   rondo language        Switch between English and Korean
   rondo relay [mode]    Show or change Claude → Codex relay mode
   rondo continue        Continue a prepared relay in Codex
@@ -564,6 +566,11 @@ def continue_relay() -> None:
     os.execv(script, [str(script), "--continue"])
 
 
+def open_lens(args: list[str]) -> None:
+    script = Path(__file__).resolve().with_name("rondo-lens")
+    os.execv(script, [str(script), *args])
+
+
 def doctor() -> int:
     print(t("doctor_title"))
     required = [("python3", True), ("zellij", True)]
@@ -598,6 +605,8 @@ def main() -> int:
         add_agent(args[1] if len(args) > 1 else None)
     elif command == "send":
         send_agent_message(args[1] if len(args) > 1 else None, args[2:])
+    elif command == "lens":
+        open_lens(args[1:])
     elif command in ("language", "lang"):
         change_language()
     elif command == "relay":

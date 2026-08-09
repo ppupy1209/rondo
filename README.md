@@ -12,6 +12,7 @@ It provides:
 - interactive Korean / English setup and agent selection;
 - a shared status bar for models, usage, and relay state;
 - visible prompts between agent panes through `rondo send`;
+- element-scoped frontend requests through Rondo Lens;
 - opt-in Claude → Codex continuity at the usage limit.
 
 Rondo is local-first. It reads the files that each installed CLI already stores on your machine and does not add a hosted service, account, or API key.
@@ -40,6 +41,7 @@ rondo             # open or attach to the project's persistent workspace
 rondo setup       # choose language, agents, and relay behavior
 rondo add         # select and add another agent pane
 rondo send codex "Review the current diff"  # type and submit in the Codex pane
+rondo lens        # click a UI element and send its focused context
 rondo doctor      # diagnose dependencies and configuration
 ```
 
@@ -70,14 +72,31 @@ rondo send gemini "Research another implementation approach"
 
 Run the command inside a Rondo session, with the target pane open. An agent can invoke the same command through its shell tool, so manual prompts, agent delegation, and automatic relay all use one visible input path.
 
+## Rondo Lens
+
+Lens turns a visual frontend request into an element-scoped prompt. Run it from the Rondo shell tab, point at the UI in the dedicated browser window, and click the element you want changed.
+
+```sh
+rondo lens                              # defaults to http://localhost:3000/
+rondo lens http://localhost:5173/
+rondo lens https://staging.example.com --allow-remote
+```
+
+Hover gives immediate element highlighting. Click selects, Esc cancels, and the terminal then asks for the instruction and receiving agent. Before anything is sent, Rondo shows the URL, selector, included data, destination, and a `y/N` confirmation. The visible prompt in the agent pane contains your instruction and a path to the focused context packet.
+
+The packet includes a cropped screenshot around the selection, sanitized DOM and visible text, a small computed-style set, and accessibility metadata. Form values are removed from the DOM and masked during the screenshot. Cookies, browser storage, credentials, and full-page screenshots are never read. Localhost is the default boundary; remote pages require the explicit `--allow-remote` flag.
+
+Lens launches an isolated Chrome/Chromium profile and deletes that temporary profile when the selection ends. Set `RONDO_BROWSER=/path/to/chrome` if the browser is not discovered automatically.
+
 ## How it works
 
 1. `rondo` resolves the current Git root and maps it to one zellij session.
 2. It builds a layout from `~/.config/rondo/panels` and launches each native CLI in the same working tree.
 3. `rondo-status` reads local CLI state every five seconds and renders only the panes that are open.
 4. `rondo send` targets a pane by its Rondo name and submits a visible prompt through zellij.
-5. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
-6. At Claude's usage threshold, the continuity relay prepares a local packet and can send it to the existing Codex pane.
+5. `rondo lens` captures one selected UI element into a private local packet and sends it only after confirmation.
+6. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
+7. At Claude's usage threshold, the continuity relay prepares a local packet and can send it to the existing Codex pane.
 
 The agents do not share a vendor chat session. They share the real project directory, Git state, a persistent terminal workspace, and a small provider-neutral continuity packet.
 
@@ -123,6 +142,7 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo setup` | Choose language, panes, and relay mode |
 | `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
 | `rondo send <agent> <message>` | Type and submit a visible prompt in that agent's pane |
+| `rondo lens [URL]` | Click a UI element and send its focused context after confirmation |
 | `rondo language` | Switch Korean / English |
 | `rondo relay [off\|ready\|auto]` | Inspect or change the continuity strategy |
 | `rondo continue` | Send the pending handoff to the existing Codex pane |
@@ -150,6 +170,7 @@ The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/
 ~/.cache/rondo/
   layout.kdl     generated zellij layout
   claude.*       local display cache
+  lens/          private element context packets and cropped screenshots
   relay/         private continuity packets and delivery logs
 ```
 
@@ -161,7 +182,7 @@ No telemetry is included. Rondo does not store credentials. A relay excerpt can 
 
 ```sh
 python3 -m unittest discover -s tests -v
-python3 -m py_compile bin/rondo bin/rondo-relay bin/rondo-claude-status bin/ai-status
+python3 -m py_compile bin/rondo bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
 

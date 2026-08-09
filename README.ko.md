@@ -12,6 +12,7 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 - 한국어·영어와 실행할 에이전트를 고르는 선택형 설정
 - 모델·사용량·인계 상태를 한눈에 보는 공통 상태 표시줄
 - `rondo send`를 통한 화면에 보이는 에이전트 간 요청
+- Rondo Lens를 통한 화면 요소 단위 프론트엔드 요청
 - 사용량 한도에서 동작하는 선택형 Claude → Codex 연속 작업
 
 별도 서버·계정·API 키가 필요 없는 로컬 우선 도구입니다. 각 CLI가 이미 내 컴퓨터에 저장한 상태만 읽습니다.
@@ -40,6 +41,7 @@ rondo             # 프로젝트 작업공간 열기 / 다시 붙기
 rondo setup       # 언어·에이전트·인계 전략 선택
 rondo add         # 에이전트를 선택해 패널 추가
 rondo send codex "현재 diff를 검토해 주세요"  # Codex 패널에 입력하고 전송
+rondo lens        # 화면 요소를 클릭해 해당 맥락만 전달
 rondo doctor      # 설치와 설정 진단
 ```
 
@@ -70,14 +72,31 @@ rondo send gemini "다른 구현 방식을 조사해 주세요"
 
 Rondo 세션 안에서 대상 패널이 열린 상태로 실행해야 합니다. 각 에이전트도 셸 도구에서 같은 명령을 실행할 수 있으므로 사용자의 직접 요청, 에이전트 간 위임, 자동 인계가 모두 화면에 보이는 하나의 입력 경로를 사용합니다.
 
+## Rondo Lens
+
+Lens는 눈으로 보고 내린 프론트엔드 요청을 선택한 요소 범위의 프롬프트로 바꿉니다. Rondo의 shell 탭에서 실행한 뒤 별도로 열린 브라우저에서 바꾸고 싶은 요소를 가리켜 클릭합니다.
+
+```sh
+rondo lens                              # 기본 주소: http://localhost:3000/
+rondo lens http://localhost:5173/
+rondo lens https://staging.example.com --allow-remote
+```
+
+가리키는 즉시 요소가 강조되고, 클릭하면 선택되며, Esc로 취소할 수 있습니다. 이어서 터미널에서 명령과 받을 에이전트를 선택합니다. 전송 전에는 URL, 선택자, 포함 데이터, 받는 에이전트를 보여주고 `y/N`으로 다시 확인합니다. 에이전트 패널에는 사용자의 명령과 요소 맥락 파일 경로가 직접 입력되어 전송 과정을 볼 수 있습니다.
+
+맥락 파일에는 선택 요소 주변의 부분 스크린샷, 정리된 DOM과 화면 텍스트, 필요한 계산 스타일, 접근성 정보만 들어갑니다. 폼 입력값은 DOM에서 제거하고 스크린샷을 찍는 순간에도 가립니다. 쿠키, 브라우저 저장소, 자격증명, 전체 화면은 읽지 않습니다. 기본 허용 범위는 localhost이며 원격 페이지는 `--allow-remote`를 명시해야 합니다.
+
+Lens는 격리된 Chrome/Chromium 프로필을 열고 선택이 끝나면 임시 프로필을 삭제합니다. 브라우저를 자동으로 찾지 못하면 `RONDO_BROWSER=/브라우저/실행파일/경로`를 지정할 수 있습니다.
+
 ## 동작 방식
 
 1. `rondo`가 현재 Git 루트를 찾아 프로젝트별 zellij 세션 하나에 연결합니다.
 2. `~/.config/rondo/panels`에 저장된 선택으로 레이아웃을 만들고, 같은 작업 트리에서 각 CLI를 실행합니다.
 3. `rondo-status`가 5초마다 로컬 CLI 상태를 읽어 실제로 열린 패널만 표시합니다.
 4. `rondo send`가 Rondo 패널 이름으로 대상을 찾아 zellij를 통해 보이는 요청을 전달합니다.
-5. 지원되는 종료 훅과 래퍼가 세션 종료 후 선택적인 Git 핸드오프 로그를 갱신합니다.
-6. Claude 사용량이 임계치에 닿으면 로컬 인계 패킷을 준비하고 기존 Codex 패널로 전달할 수 있습니다.
+5. `rondo lens`가 선택한 화면 요소 하나를 비공개 로컬 패킷으로 만들고 확인 후에만 전달합니다.
+6. 지원되는 종료 훅과 래퍼가 세션 종료 후 선택적인 Git 핸드오프 로그를 갱신합니다.
+7. Claude 사용량이 임계치에 닿으면 로컬 인계 패킷을 준비하고 기존 Codex 패널로 전달할 수 있습니다.
 
 벤더의 채팅 세션 자체를 합치는 방식은 아닙니다. 대신 실제 프로젝트 디렉터리, Git 상태, 영속적인 터미널, 작은 벤더 중립 인계 패킷을 공유합니다.
 
@@ -123,6 +142,7 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo setup` | 언어·패널·인계 모드 선택 |
 | `rondo add [agent]` | 패널 추가, 인자를 생략하면 선택 화면 표시 |
 | `rondo send <agent> <message>` | 대상 패널에 보이는 요청을 입력하고 전송 |
+| `rondo lens [URL]` | 화면 요소를 클릭하고 확인 후 해당 맥락만 전달 |
 | `rondo language` | 한국어 / English 변경 |
 | `rondo relay [off\|ready\|auto]` | 인계 전략 확인 / 변경 |
 | `rondo continue` | 대기 중인 인계를 기존 Codex 패널로 전달 |
@@ -150,6 +170,7 @@ zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 �
 ~/.cache/rondo/
   layout.kdl     생성된 zellij 레이아웃
   claude.*       로컬 표시 캐시
+  lens/          비공개 요소 맥락 파일과 부분 스크린샷
   relay/         비공개 인계 패킷과 전달 로그
 ```
 
@@ -161,7 +182,7 @@ zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 �
 
 ```sh
 python3 -m unittest discover -s tests -v
-python3 -m py_compile bin/rondo bin/rondo-relay bin/rondo-claude-status bin/ai-status
+python3 -m py_compile bin/rondo bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
 

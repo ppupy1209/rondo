@@ -124,6 +124,84 @@ class RondoTests(unittest.TestCase):
             ["zellij", "action", "send-keys", "--pane-id", "2", "Enter"],
         )
 
+    def test_lens_command_executes_the_companion_cli(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["open_lens"].__globals__
+        with patch.object(scope["os"], "execv") as execv:
+            rondo["open_lens"](["http://localhost:4173", "--allow-remote"])
+        script = ROOT / "bin" / "rondo-lens"
+        execv.assert_called_once_with(
+            script, [str(script), "http://localhost:4173", "--allow-remote"]
+        )
+
+
+class LensTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.config = self.base / "config"
+        self.cache = self.base / "cache"
+        self.lens = load_script("rondo-lens", self.config, self.cache)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def selection(self):
+        return {
+            "url": "http://localhost:3000/work",
+            "title": "Rondo",
+            "selector": "main > button:nth-of-type(2)",
+            "tag": "button",
+            "role": "button",
+            "accessibleName": "Save",
+            "html": '<button class="primary">Save</button>',
+            "text": "Save",
+            "styles": {"display": "flex", "color": "rgb(0, 0, 0)"},
+            "rect": {"left": 10, "top": 20, "right": 110, "bottom": 60, "width": 100, "height": 40},
+            "viewport": {"width": 800, "height": 600, "deviceScaleFactor": 2},
+        }
+
+    def test_only_local_http_urls_are_allowed_by_default(self):
+        allowed = self.lens["allowed_url"]
+        self.assertTrue(allowed("http://localhost:3000"))
+        self.assertTrue(allowed("https://app.localhost/path"))
+        self.assertFalse(allowed("https://example.com"))
+        self.assertTrue(allowed("https://example.com", allow_remote=True))
+        self.assertFalse(allowed("https://user:secret@example.com", allow_remote=True))
+        self.assertFalse(allowed("file:///tmp/index.html", allow_remote=True))
+
+    def test_screenshot_is_cropped_to_the_selected_element(self):
+        clip = self.lens["screenshot_clip"](self.selection())
+        self.assertEqual(clip, {"x": 0.0, "y": 4, "width": 126.0, "height": 72, "scale": 1})
+
+    def test_context_packet_and_image_are_private(self):
+        packet, image = self.lens["write_packet"](
+            self.selection(), b"png", "Make this button quieter"
+        )
+        document = packet.read_text()
+        self.assertIn("Make this button quieter", document)
+        self.assertIn("main > button:nth-of-type(2)", document)
+        self.assertEqual(image.read_bytes(), b"png")
+        self.assertEqual(packet.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(image.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(packet.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_capture_script_removes_form_values_and_masks_the_screenshot(self):
+        script = self.lens["SELECTION_SCRIPT"]
+        self.assertIn("node.removeAttribute('value')", script)
+        self.assertIn("url: `${location.origin}${location.pathname}`", script)
+        self.assertNotIn("__RONDO_LENS_BANNER__", self.lens["selection_script"]())
+        source = Path(ROOT / "bin" / "rondo-lens").read_text()
+        self.assertIn("input,textarea,select,[contenteditable]", source)
+
+    def test_page_readiness_retries_a_replaced_execution_context(self):
+        failed = RuntimeError("Execution context was destroyed")
+        devtools = unittest.mock.Mock()
+        devtools.call.side_effect = [failed, {"result": {"value": "complete"}}]
+        with patch.object(self.lens["time"], "sleep"):
+            self.lens["wait_for_page"](devtools)
+        self.assertEqual(devtools.call.call_count, 2)
+
 
 class RelayTests(unittest.TestCase):
     def setUp(self):
