@@ -25,6 +25,8 @@ CACHE = os.path.join(
 )
 LIMITS = os.path.join(CACHE, "claude-limits.json")
 CODEX_DB = os.path.expanduser("~/.codex/state_5.sqlite")
+CODEX_SESSIONS = os.path.expanduser("~/.codex/sessions")
+TAIL_BYTES = 400_000
 AGY_DIR = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
 BAR_CELLS = 8
 STALE_SECONDS = 3600
@@ -127,6 +129,62 @@ def claude_field(root):
     return " ".join(bits) or None
 
 
+def newest_rollout():
+    """~/.codex/sessions/<년>/<월>/<일>/*.jsonl 중 가장 최근 파일."""
+    path = CODEX_SESSIONS
+    try:
+        for _ in range(3):
+            names = sorted(os.listdir(path))
+            if not names:
+                return None
+            path = os.path.join(path, names[-1])
+        files = [os.path.join(path, f) for f in os.listdir(path) if f.endswith(".jsonl")]
+    except OSError:
+        return None
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def codex_limits():
+    """rollout 에 남는 rate_limits 스냅샷. 계정 단위라 프로젝트를 안 따진다.
+
+    파일이 커질 수 있어 꼬리만 읽고 마지막 스냅샷을 쓴다.
+    """
+    path = newest_rollout()
+    if not path:
+        return []
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - TAIL_BYTES))
+            blob = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    key = '"rate_limits":'
+    at = blob.rfind(key)
+    if at < 0:
+        return []
+    try:
+        snapshot, _ = json.JSONDecoder().raw_decode(blob[at + len(key):])
+    except ValueError:
+        return []
+
+    now = time.time()
+    windows = []
+    for slot in ("secondary", "primary"):  # 짧은 창을 앞에 둔다
+        window = snapshot.get(slot)
+        if not window or window.get("resets_at", 0) <= now:
+            continue
+        minutes = window.get("window_minutes") or 0
+        if minutes >= 10080:
+            label = "wk"
+        elif minutes >= 60:
+            label = f"{minutes // 60}h"
+        else:
+            label = f"{minutes}m"
+        windows.append((label, window["used_percent"], window["resets_at"]))
+    return windows
+
+
 def codex_field(root):
     # thread_source='user' 로 서브에이전트(auto-review 등) 스레드를 제외한다
     row = query(
@@ -144,6 +202,9 @@ def codex_field(root):
     if tokens(used):
         # 현재 컨텍스트가 아니라 스레드 누적 토큰이다
         bits.append(tokens(used) + " tok")
+    for label, used_pct, resets_at in codex_limits():
+        bar, left = battery(used_pct)
+        bits.append(f"{label} {bar} {left:.0f}%({until(resets_at)})")
     return " ".join(bits)
 
 
