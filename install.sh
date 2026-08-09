@@ -33,17 +33,29 @@ for path, agent in zip(sys.argv[1:], ("Claude", "Gemini")):
         with open(path) as fh:
             cfg = json.load(fh)
 
+    changed = False
     hooks = cfg.setdefault("hooks", {}).setdefault("SessionEnd", [])
     if any(entry in group.get("hooks", []) for group in hooks):
         print("hook  %-6s 이미 등록됨" % agent)
-        continue
+    else:
+        hooks.append({"hooks": [entry]})
+        changed = True
+        print("hook  %-6s SessionEnd 등록" % agent)
 
-    hooks.append({"hooks": [entry]})
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as fh:
-        json.dump(cfg, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
-    print("hook  %-6s SessionEnd 등록 (기존 파일은 .bak 로 백업)" % agent)
+    # 모델·컨텍스트·5시간/주간 한도 표시. 이미 statusLine 이 있으면 건드리지 않는다.
+    if agent == "Claude":
+        if cfg.get("statusLine"):
+            print("status Claude 기존 statusLine 유지")
+        else:
+            cfg["statusLine"] = {"type": "command", "command": "claude-statusline"}
+            changed = True
+            print("status Claude statusLine 등록")
+
+    if changed:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump(cfg, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
 PY
 else
     echo "hook  python3 없음 — SessionEnd 훅은 직접 등록 필요" >&2

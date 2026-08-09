@@ -4,6 +4,7 @@ Claude Code · Codex · Antigravity · Kimi · Grok 를 프로젝트 단위로 �
 
 - **`ai`** — 프로젝트마다 zellij 세션 하나. 한 화면에 AI 3개, 껐다 켜도 유지
 - **`handoff`** — 세션이 끝나면 그동안의 커밋을 레포의 핸드오프 문서에 기록
+- **`claude-statusline`** — Claude Code 상태줄에 모델·컨텍스트·5시간/주간 한도 표시
 - **`codex-session` · `agy-session`** — `ai` 가 패널에서 쓰는 래퍼. 직접 칠 일은 없다
 
 ## 설치
@@ -130,6 +131,22 @@ Codex 에 훅을 못 다는 이유: 훅 이벤트 목록에 **세션 종료가 �
 ```sh
 handoff Codex
 ```
+
+## `claude-statusline` — 모델 · 컨텍스트 · 사용 한도
+
+Claude Code 하단 상태줄에 이렇게 뜬다.
+
+```
+Opus 5 high · ctx 29% · 5h 41% (2h11m) · wk 63% (3d5h)
+```
+
+Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. 거기에 `rate_limits.five_hour` · `seven_day` 가 `used_percentage` 와 `resets_at` 로 들어 있다. **CLI 에서 5시간/주간 한도를 보는 방법은 이것뿐이다** — 별도 서브커맨드는 없고, `/status` 로 세션 중 확인만 가능하다.
+
+`rate_limits` 는 구독 계정에서 첫 API 응답 이후에만 들어온다. 없으면(사용량 과금 계정, 세션 시작 직후) 해당 항목을 빼고 출력한다.
+
+`install.sh` 가 `~/.claude/settings.json` 에 등록한다. **이미 `statusLine` 이 설정돼 있으면 건드리지 않는다** — 다른 statusline 플러그인을 쓰고 있다면 그쪽이 유지된다.
+
+Codex · Antigravity · Kimi · Grok 은 각자 자체 상태 표시를 쓴다. 동일한 통합 표시는 아직 없다.
 
 ### 기록되는 것 / 안 되는 것
 
