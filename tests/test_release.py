@@ -48,6 +48,36 @@ class ReleaseTest(unittest.TestCase):
         with self.assertRaises(release.ReleaseError):
             release.normalize_version("main")
 
+    def test_command_center_check_is_cached_and_throttled(self) -> None:
+        cache = self.base / "release-check.json"
+        opener = mock.Mock(return_value=Response(b'{"tag_name":"v0.12.1"}'))
+        first = release.version_status(cache, "0.12.0", opener=opener, now=100)
+        second = release.version_status(
+            cache,
+            "0.12.0",
+            opener=mock.Mock(side_effect=AssertionError("cache was ignored")),
+            now=101,
+        )
+
+        self.assertTrue(first["available"])
+        self.assertEqual(first, second)
+        opener.assert_called_once()
+
+    def test_failed_check_stays_quiet_until_retry_window(self) -> None:
+        cache = self.base / "release-check.json"
+        offline = mock.Mock(side_effect=OSError("offline"))
+        first = release.version_status(cache, "0.12.0", opener=offline, now=100)
+        second = release.version_status(
+            cache,
+            "0.12.0",
+            opener=mock.Mock(side_effect=AssertionError("retried too soon")),
+            now=101,
+        )
+
+        self.assertEqual(first["latest"], "")
+        self.assertEqual(first, second)
+        offline.assert_called_once()
+
     def test_update_runs_the_trusted_installer_and_verifies_result(self) -> None:
         def runner(command, check, env):
             self.assertTrue(check)

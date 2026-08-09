@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import difflib
 import hashlib
 import json
@@ -29,7 +30,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.12.0"
+VERSION = "0.12.1"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -237,6 +238,7 @@ TEXT = {
         "home_schedule": "예약 작업 관리",
         "home_git": "Git·PR 정책 확인",
         "home_setup": "Rondo 설정 변경",
+        "home_update": "검증된 Rondo 업데이트",
         "home_exit": "메뉴 닫기",
         "home_goal_prompt": "이번 작업의 목표를 한 줄로 입력하세요: ",
         "home_recall_prompt": "찾을 내용을 입력하세요: ",
@@ -246,6 +248,11 @@ TEXT = {
         "center_test": "테스트 {complete}/{total}",
         "center_race": "race {agents}개 에이전트",
         "center_proof": "Proof {verdict} · {files}개 파일",
+        "center_version_current": "Rondo {current} · 최신",
+        "center_version_available": "Rondo {current} → {latest} 업데이트 가능",
+        "center_version_unknown": "Rondo {current} · 최신 버전 확인 대기",
+        "center_version_source": "Rondo {current} · 소스 연결",
+        "center_tools": "도구: {tools}",
         "center_next": "다음 권장: {action}",
         "center_no_goal": "기록 안 됨",
         "center_none": "없음",
@@ -615,6 +622,7 @@ Inside a session
         "home_schedule": "Manage scheduled work",
         "home_git": "Inspect Git and PR policy",
         "home_setup": "Change Rondo settings",
+        "home_update": "Install verified Rondo update",
         "home_exit": "Close menu",
         "home_goal_prompt": "Describe this work's goal in one line: ",
         "home_recall_prompt": "What do you want to find? ",
@@ -624,6 +632,11 @@ Inside a session
         "center_test": "Tests {complete}/{total}",
         "center_race": "Race with {agents} agents",
         "center_proof": "Proof {verdict} · {files} files",
+        "center_version_current": "Rondo {current} · current",
+        "center_version_available": "Rondo {current} → {latest} available",
+        "center_version_unknown": "Rondo {current} · latest check pending",
+        "center_version_source": "Rondo {current} · source checkout",
+        "center_tools": "Tools: {tools}",
         "center_next": "Recommended next: {action}",
         "center_no_goal": "not recorded",
         "center_none": "none",
@@ -3192,12 +3205,38 @@ def _display_text(value: object, limit: int = 160) -> str:
     return " ".join(text.split())[:limit]
 
 
+def _component_versions() -> dict[str, str]:
+    names = [name for name in read_setting("panels").split() if name in AGENTS]
+    commands = [(name, AGENTS[name][1]) for name in dict.fromkeys(names)]
+    commands.append(("zellij", "zellij"))
+    def probe(item: tuple[str, str]) -> tuple[str, str]:
+        name, executable = item
+        binary = shutil.which(executable)
+        if not binary:
+            return name, ""
+        try:
+            result = subprocess.run(
+                [binary, "--version"], capture_output=True, text=True, timeout=2
+            )
+        except (OSError, subprocess.SubprocessError):
+            return name, ""
+        match = re.search(
+            r"(?<![\d.])v?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)",
+            (result.stdout or "") + "\n" + (result.stderr or ""),
+        )
+        return name, match.group(1) if match else ""
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(commands)) as pool:
+        return {name: version for name, version in pool.map(probe, commands) if version}
+
+
 def command_center_state() -> dict:
     from rondo import command_center
     from rondo import journal as journal_lib
     from rondo import knowledge as knowledge_lib
     from rondo import proof as proof_lib
     from rondo import race as race_lib
+    from rondo import release as release_lib
     from rondo import testing as testing_lib
 
     root = repo_root()
@@ -3230,6 +3269,16 @@ def command_center_state() -> dict:
         if active_race else None
     )
     latest = proof_lib.latest(root).get("summary") or {}
+    installation = release_lib.installation_root(__file__)
+    try:
+        current = release_lib.metadata(installation)["version"]
+        managed = True
+    except release_lib.ReleaseError:
+        current = VERSION
+        managed = False
+    version = release_lib.version_status(
+        CACHE_DIR / "release-check.json", current
+    ) | {"managed": managed, "tools": _component_versions()}
     return command_center.build(
         repository=_display_text(root.name, 80),
         branch=_display_text(git_output(root, "branch", "--show-current") or "(detached)", 80),
@@ -3240,6 +3289,7 @@ def command_center_state() -> dict:
         test_run=test_state,
         race=race_state,
         proof={"verdict": latest.get("verdict", ""), "files": latest.get("files", 0)},
+        version=version,
     )
 
 
@@ -3253,6 +3303,7 @@ def _center_action_label(action: str) -> str:
         "proof": t("home_proof"),
         "knowledge": t("home_knowledge"),
         "schedule": t("home_schedule"),
+        "update": t("home_update"),
     }[action]
 
 
@@ -3285,6 +3336,25 @@ def command_center_lines(state: dict) -> list[str]:
             verdict=state["proof"]["verdict"],
             files=state["proof"]["files"],
         ))
+    version = state["version"]
+    if version["current"]:
+        if not version["managed"]:
+            lines.append(t("center_version_source", current=version["current"]))
+        elif version["available"]:
+            lines.append(t(
+                "center_version_available",
+                current=version["current"],
+                latest=version["latest"],
+            ))
+        elif version["latest"]:
+            lines.append(t("center_version_current", current=version["current"]))
+        else:
+            lines.append(t("center_version_unknown", current=version["current"]))
+    if version["tools"]:
+        tools = " · ".join(
+            f"{name} {number}" for name, number in version["tools"].items()
+        )
+        lines.append(t("center_tools", tools=tools))
     lines.append(t("center_next", action=_center_action_label(state["next"])))
     return lines
 
@@ -3323,6 +3393,8 @@ def _run_home_action(action: str) -> int:
         return history_command([query] if query else [])
     if action == "schedule":
         return schedule_menu_command()
+    if action == "update":
+        return update_command([])
     if action == "git":
         return git_command([])
     if action == "setup":
@@ -3347,6 +3419,8 @@ def home_command() -> int:
         ("setup", t("home_setup")),
         ("exit", t("home_exit")),
     ]
+    if state["version"]["available"] and state["version"]["managed"]:
+        standard.insert(-1, ("update", t("home_update")))
     recommended = state["next"]
     recommendation = (recommended, "★ " + _center_action_label(recommended))
     options = [recommendation, *(item for item in standard if item[0] != recommended)]

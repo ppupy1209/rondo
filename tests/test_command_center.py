@@ -42,6 +42,19 @@ class CommandCenterTest(unittest.TestCase):
         self.assertEqual(self.state(changed=1, goal="Fix login")["next"], "proof")
         self.assertEqual(self.state(goal="Fix login")["next"], "test")
 
+    def test_managed_update_is_recommended_only_when_work_is_clean(self) -> None:
+        version = {
+            "current": "0.12.0", "latest": "0.12.1",
+            "available": True, "managed": True,
+            "tools": {"claude": "2.1.0", "codex": "0.147.0"},
+        }
+        clean = self.state(goal="Done", version=version)
+        changed = self.state(goal="Ship", changed=1, version=version)
+
+        self.assertEqual((clean["next"], clean["reason"]), ("update", "update_available"))
+        self.assertEqual(changed["next"], "proof")
+        self.assertEqual(clean["version"]["tools"]["codex"], "0.147.0")
+
 
 if __name__ == "__main__":
     unittest.main()

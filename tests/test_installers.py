@@ -1,6 +1,8 @@
 """Release bootstrap contracts that must not silently become mutable."""
 from __future__ import annotations
 
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -8,6 +10,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallerContractTest(unittest.TestCase):
+    def test_readme_install_urls_match_the_cli_version(self) -> None:
+        version = subprocess.run(
+            [sys.executable, str(ROOT / "bin" / "rondo"), "--version"],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()[1]
+        for name in ("README.md", "README.en.md"):
+            source = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn(f"/rondo/v{version}/install.sh", source)
+            self.assertIn(f"/rondo/v{version}/install.ps1", source)
+
     def test_bootstraps_use_versioned_verified_assets(self) -> None:
         shell = (ROOT / "install.sh").read_text()
         powershell = (ROOT / "install.ps1").read_text()

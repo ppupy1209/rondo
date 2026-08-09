@@ -31,7 +31,7 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.1/install.sh | sh
 ```
 
 필요한 런타임은 Python 3.10 이상뿐입니다. 설치 프로그램은 고정된 Rondo 릴리스와 Zellij 0.44.3을 내려받아 SHA-256을 확인하고, `~/.local/bin`에 명령을 만든 뒤 셸 `PATH`까지 등록합니다.
@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.sh 
 PowerShell을 열고 다음 한 줄을 실행합니다.
 
 ```powershell
-irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.1/install.ps1 | iex
 ```
 
 Windows 설치 프로그램이 Rondo와 네이티브 Zellij를 내려받습니다. Python 3.10 이상이 없으면 WinGet으로 Python도 설치합니다. WSL은 필요하지 않습니다. 설치 후 새 터미널을 여세요.
@@ -101,6 +101,8 @@ rondo update --check  # 새 검증 릴리스 확인
 ## Command Center와 제품 수명주기
 
 열린 Rondo의 `shell` 탭에서 `rondo`를 실행하면 저장소 이름·브랜치, 작업 목표, 변경 파일 수, 승인 대기 지식, 예약 작업, 독립 테스트, race, 최신 Proof를 한 화면에 표시합니다. Rondo는 이 상태를 정해진 우선순위로 판단해 지금 할 일 하나를 메뉴 맨 위에 `★`로 올립니다. 승인 대기를 먼저 처리하고, 진행 중인 테스트·race를 잇고, 변경에 목표가 없으면 목표 기록, 목표가 있으면 Proof를 권장합니다. `rondo status`는 같은 정보를 일반 텍스트로 출력합니다.
+
+Command Center는 GitHub의 최신 Rondo 릴리스를 하루에 최대 한 번 조용히 확인하고 결과를 로컬에 캐시합니다. 네트워크가 끊기면 기존 정보를 유지하고 오류를 표시하지 않으며 한 시간 뒤에만 다시 시도합니다. 설정된 Claude·Codex 등 에이전트와 Zellij는 로컬 `--version` 결과를 함께 보여 줍니다. 외부 CLI를 자동 변경하거나 벤더별 설치기를 실행하지 않으며, Rondo 자체 업데이트도 깨끗한 작업 상태에서 추천만 하고 사용자가 승인해야 적용됩니다.
 
 한 줄 설치로 받은 관리형 버전은 다음 수명주기를 지원합니다.
 

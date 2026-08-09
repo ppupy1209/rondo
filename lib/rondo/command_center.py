@@ -13,6 +13,7 @@ def build(
     test_run: dict | None = None,
     race: dict | None = None,
     proof: dict | None = None,
+    version: dict | None = None,
 ) -> dict:
     jobs = jobs or {}
     pending_jobs = int(jobs.get("pending", 0))
@@ -21,6 +22,7 @@ def build(
     test_total = int(test_run.get("total", 0))
     test_complete = min(test_total, int(test_run.get("complete", 0)))
     proof = proof or {}
+    version = version or {}
 
     if knowledge_pending:
         action, reason = "knowledge", "knowledge_pending"
@@ -32,6 +34,8 @@ def build(
         action, reason = "test-finish", "test_complete"
     elif race:
         action, reason = "race-status", "race_active"
+    elif not changed and version.get("available") and version.get("managed"):
+        action, reason = "update", "update_available"
     elif changed and not goal:
         action, reason = "goal", "goal_missing"
     elif changed:
@@ -61,6 +65,17 @@ def build(
         "proof": {
             "verdict": str(proof.get("verdict", "")),
             "files": max(0, int(proof.get("files", 0))),
+        },
+        "version": {
+            "current": str(version.get("current", "")),
+            "latest": str(version.get("latest", "")),
+            "available": bool(version.get("available")),
+            "managed": bool(version.get("managed")),
+            "tools": {
+                str(name): str(value)
+                for name, value in (version.get("tools") or {}).items()
+                if name and value
+            },
         },
         "next": action,
         "reason": reason,

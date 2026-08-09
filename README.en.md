@@ -31,7 +31,7 @@ Rondo is local-first. It reads the files that each installed CLI already stores 
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.1/install.sh | sh
 ```
 
 Python 3.10+ is the only runtime requirement. The installer downloads a fixed Rondo release and Zellij 0.44.3, verifies SHA-256, creates the commands in `~/.local/bin`, and adds that directory to your shell `PATH`.
@@ -41,7 +41,7 @@ Python 3.10+ is the only runtime requirement. The installer downloads a fixed Ro
 Open PowerShell and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.1/install.ps1 | iex
 ```
 
 The Windows installer downloads Rondo and native Zellij. If Python 3.10+ is missing, it installs Python through WinGet. WSL is not required. Open a new terminal after installation.
@@ -101,6 +101,8 @@ Human decisions such as approving memory or scheduled-work proposals are never a
 ## Command Center and product lifecycle
 
 Run `rondo` from the workspace `shell` tab to see repository and branch, work goal, changed files, pending knowledge, scheduled work, independent tests, race, and latest Proof in one view. Rondo applies a deterministic priority and puts one action at the top with `★`: human approvals first, then active tests or races, missing intent, and verification. `rondo status` prints the same state without the interactive menu.
+
+Command Center quietly checks GitHub for the latest Rondo release at most once per day and caches the result locally. If the network is unavailable, it keeps the previous result, shows no error, and waits an hour before retrying. It also shows the local `--version` result for configured agents such as Claude and Codex plus Zellij. Rondo never changes those external CLIs or runs their vendor installers; it only recommends its own verified update when the worktree is clean, and still requires user approval before installation.
 
 A managed one-line installation supports this lifecycle:
 

@@ -115,6 +115,49 @@ class RondoTests(unittest.TestCase):
         home.assert_called_once_with()
         opener.assert_not_called()
 
+    def test_command_center_shows_rondo_and_local_tool_versions(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["_component_versions"].__globals__
+        binaries = {
+            "claude": "/tools/claude",
+            "codex": "/tools/codex",
+            "zellij": "/tools/zellij",
+        }
+        outputs = {
+            "/tools/claude": "2.1.226 (Claude Code)\n",
+            "/tools/codex": "codex-cli 0.147.0\n",
+            "/tools/zellij": "zellij 0.44.3\n",
+        }
+
+        def run(command, **_kwargs):
+            return subprocess.CompletedProcess(
+                command, 0, stdout=outputs[command[0]], stderr=""
+            )
+
+        with (
+            patch.dict(scope, {"read_setting": lambda *_args: "claude codex"}),
+            patch.object(scope["shutil"], "which", side_effect=binaries.get),
+            patch.object(scope["subprocess"], "run", side_effect=run),
+        ):
+            versions = rondo["_component_versions"]()
+
+        self.assertEqual(versions, {
+            "claude": "2.1.226", "codex": "0.147.0", "zellij": "0.44.3",
+        })
+
+        from rondo.command_center import build
+
+        state = build(
+            repository="rondo", branch="main", goal="Done",
+            version={
+                "current": "0.12.0", "latest": "0.12.1",
+                "available": True, "managed": True, "tools": versions,
+            },
+        )
+        lines = rondo["command_center_lines"](state)
+        self.assertTrue(any("0.12.0 → 0.12.1" in line for line in lines))
+        self.assertTrue(any("codex 0.147.0" in line for line in lines))
+
     def test_exited_zellij_sessions_are_not_treated_as_active(self):
         rondo = load_script("rondo", self.config, self.cache)
         active, exited = rondo["parse_session_list"](

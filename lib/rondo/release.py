@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -17,6 +18,8 @@ RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 MARKER = ".rondo-release.json"
 VERSION = re.compile(r"(?:v)?([0-9]+)\.([0-9]+)\.([0-9]+)")
 MAX_RESPONSE = 1_000_000
+CHECK_TTL = 24 * 60 * 60
+RETRY_TTL = 60 * 60
 
 
 class ReleaseError(RuntimeError):
@@ -50,13 +53,13 @@ def metadata(root: Path) -> dict:
     return {"schema": 1, "version": version, "source": str(value.get("source") or "release")}
 
 
-def latest_version(opener=urllib.request.urlopen) -> str:
+def latest_version(opener=urllib.request.urlopen, timeout: float = 10) -> str:
     request = urllib.request.Request(
         RELEASE_API,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "rondo-update"},
     )
     try:
-        with opener(request, timeout=10) as response:
+        with opener(request, timeout=timeout) as response:
             payload = response.read(MAX_RESPONSE + 1)
     except (OSError, urllib.error.URLError) as error:
         raise ReleaseError("network") from error
@@ -67,6 +70,76 @@ def latest_version(opener=urllib.request.urlopen) -> str:
         return normalize_version(value["tag_name"])
     except (UnicodeError, ValueError, KeyError, TypeError, ReleaseError):
         raise ReleaseError("invalid_release") from None
+
+
+def version_status(
+    cache: Path,
+    current: str,
+    opener=urllib.request.urlopen,
+    now: int | None = None,
+) -> dict:
+    """Quiet, throttled release check for Command Center."""
+    current = normalize_version(current)
+    now = int(time.time()) if now is None else int(now)
+    unsafe = cache.is_symlink() or cache.parent.is_symlink()
+    value: dict = {}
+    if not unsafe and cache.is_file():
+        try:
+            candidate = json.loads(cache.read_text(encoding="utf-8"))
+            if not isinstance(candidate, dict):
+                raise ValueError
+            raw_latest = candidate.get("latest", "")
+            latest = normalize_version(raw_latest) if raw_latest else ""
+            checked = candidate.get("checked_at", 0)
+            attempted = candidate.get("attempted_at", 0)
+            if (
+                candidate.get("schema") == 1
+                and all(
+                    isinstance(item, int) and not isinstance(item, bool) and item >= 0
+                    for item in (checked, attempted)
+                )
+            ):
+                value = {
+                    "schema": 1,
+                    "latest": latest,
+                    "checked_at": checked,
+                    "attempted_at": attempted,
+                }
+        except (OSError, ValueError, TypeError, ReleaseError):
+            pass
+
+    latest = value.get("latest", "")
+    attempted = int(value.get("attempted_at", 0))
+    ttl = CHECK_TTL if latest else RETRY_TTL
+    refresh = not attempted or now < attempted or now - attempted >= ttl
+    if refresh and not unsafe:
+        try:
+            latest = latest_version(opener, timeout=2)
+            value = {
+                "schema": 1,
+                "latest": latest,
+                "checked_at": now,
+                "attempted_at": now,
+            }
+        except ReleaseError:
+            value = {
+                "schema": 1,
+                "latest": latest,
+                "checked_at": int(value.get("checked_at", 0)),
+                "attempted_at": now,
+            }
+        try:
+            atomic_json(cache, value)
+        except OSError:
+            pass
+
+    available = bool(latest) and version_tuple(latest) > version_tuple(current)
+    return {
+        "current": current,
+        "latest": latest,
+        "available": available,
+        "checked_at": int(value.get("checked_at", 0)),
+    }
 
 
 def update(root: Path, target: str, runner=subprocess.run) -> str:
