@@ -34,6 +34,46 @@ class RondoTests(unittest.TestCase):
         rondo = load_script("rondo", self.config, self.cache)
         self.assertEqual(rondo["safe_session_name"]("My project / feature"), "My-project-feature")
         self.assertEqual(rondo["safe_session_name"]("***"), "rondo")
+        self.assertEqual(rondo["rondo_session_name"]("my-project"), "rondo-my-project")
+
+    def test_exited_zellij_sessions_are_not_treated_as_active(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        active, exited = rondo["parse_session_list"](
+            "working [Created 2m ago]\n"
+            "rondo-project [Created 1h ago] (EXITED - attach to resurrect)\n"
+        )
+        self.assertEqual(active, {"working"})
+        self.assertEqual(exited, {"rondo-project"})
+
+    def test_exited_rondo_session_is_recreated_with_current_layout(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        rondo["write_setting"]("panels", "claude")
+        scope = rondo["open_session"].__globals__
+
+        with (
+            patch.dict(
+                scope,
+                {
+                    "repo_root": lambda: Path("/tmp/project"),
+                    "zellij_sessions": lambda: (set(), {"rondo-project"}),
+                    "installed": lambda _name: True,
+                    "write_layout": lambda _panels: Path("/tmp/layout.kdl"),
+                },
+            ),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["subprocess"], "run") as run,
+            patch.object(scope["os"], "chdir"),
+            patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                rondo["open_session"]()
+
+        run.assert_called_once_with(
+            ["zellij", "delete-session", "rondo-project"], check=True
+        )
+        execvp.assert_called_once_with(
+            "zellij", ["zellij", "-s", "rondo-project", "-n", "/tmp/layout.kdl"]
+        )
 
     def test_settings_are_atomic_and_private(self):
         rondo = load_script("rondo", self.config, self.cache)

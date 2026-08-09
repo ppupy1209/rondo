@@ -14,7 +14,7 @@ import termios
 import tty
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
 LEGACY_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ai-tools"
@@ -339,6 +339,28 @@ def safe_session_name(value: str) -> str:
     return name[:80] or "rondo"
 
 
+def rondo_session_name(value: str) -> str:
+    return safe_session_name(f"rondo-{value}")
+
+
+def parse_session_list(value: str) -> tuple[set[str], set[str]]:
+    active: set[str] = set()
+    exited: set[str] = set()
+    for line in value.splitlines():
+        name = line.split(maxsplit=1)[0] if line.strip() else ""
+        if not name:
+            continue
+        (exited if "(EXITED" in line else active).add(name)
+    return active, exited
+
+
+def zellij_sessions() -> tuple[set[str], set[str]]:
+    result = subprocess.run(
+        ["zellij", "list-sessions", "-n"], capture_output=True, text=True
+    )
+    return parse_session_list(result.stdout)
+
+
 def configured_panels() -> list[str]:
     values = read_setting("panels").split()
     if not values or any(name not in AGENTS for name in values):
@@ -379,11 +401,9 @@ def open_session(custom_name: str | None = None) -> None:
     if shutil.which("zellij") is None:
         raise RuntimeError(t("not_installed", name="zellij"))
     root = repo_root()
-    name = safe_session_name(custom_name or root.name)
-    existing = subprocess.run(
-        ["zellij", "list-sessions", "-sn"], capture_output=True, text=True
-    )
-    if existing.returncode == 0 and name in existing.stdout.splitlines():
+    name = rondo_session_name(custom_name or root.name)
+    active, exited = zellij_sessions()
+    if name in active:
         os.execvp("zellij", ["zellij", "attach", name])
     if not (CONFIG_DIR / "panels").exists():
         setup()
@@ -393,6 +413,8 @@ def open_session(custom_name: str | None = None) -> None:
         raise RuntimeError(t("not_installed", name=", ".join(unavailable)))
     layout = write_layout(panels)
     print(f"{t('panels')}: {' '.join(panels)}")
+    if name in exited:
+        subprocess.run(["zellij", "delete-session", name], check=True)
     os.chdir(root)
     os.execvp("zellij", ["zellij", "-s", name, "-n", str(layout)])
 
