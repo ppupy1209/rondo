@@ -218,33 +218,31 @@ def write_index(directory: Path, packet: Path, root: Path, status: str, **extra:
     atomic_write(directory / "pending.json", json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
-def codex_prompt(packet: str) -> str:
-    return "You are receiving a Rondo continuity packet. Follow its handoff contract.\n\n" + packet
+def codex_prompt(packet_path: Path) -> str:
+    if read_setting("language", "en") == "ko":
+        return f"[Rondo · Claude → Codex] Claude가 작업을 위임했습니다. 인계 파일을 읽고 현재 작업을 이어서 완료하세요: {packet_path}"
+    return f"[Rondo · Claude → Codex] Claude delegated this task. Read the continuity packet and continue the current work: {packet_path}"
 
 
 def run_auto(directory: Path, packet_path: Path, root: Path) -> int:
     log = directory / "codex.log"
-    last = directory / "codex-last-message.txt"
     write_index(directory, packet_path, root, "running", log=str(log))
-    command = [
-        "codex", "exec", "-C", str(root), "-s", "workspace-write", "-a", "never",
-        "-o", str(last), "-",
-    ]
+    rondo = Path(__file__).resolve().with_name("rondo")
     try:
-        with log.open("w") as output:
-            result = subprocess.run(
-                command,
-                input=codex_prompt(packet_path.read_text()),
-                text=True,
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                cwd=root,
-            )
+        result = subprocess.run(
+            [str(rondo), "send", "codex", codex_prompt(packet_path)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
     except OSError as error:
         atomic_write(log, f"rondo: {error}\n")
         write_index(directory, packet_path, root, "failed", log=str(log))
         return 1
-    status = "completed" if result.returncode == 0 else "failed"
+    output = result.stdout + result.stderr
+    if output:
+        atomic_write(log, output)
+    status = "sent" if result.returncode == 0 else "failed"
     write_index(directory, packet_path, root, status, log=str(log), result=result.returncode)
     return result.returncode
 
@@ -292,14 +290,12 @@ def continue_pending() -> int:
         if index.get("status") != "ready":
             raise ValueError("relay is not ready")
         packet_path = Path(index["packet"])
-        packet = packet_path.read_text()
+        if not packet_path.is_file():
+            raise OSError("relay packet is missing")
     except (OSError, ValueError, KeyError):
         print("rondo-relay: no pending relay for this repository", file=sys.stderr)
         return 1
-    write_index(directory, packet_path, root, "claimed")
-    prompt = codex_prompt(packet)
-    os.execvp("codex", ["codex", "-C", str(root), prompt])
-    return 0
+    return run_auto(directory, packet_path, root)
 
 
 def main() -> int:

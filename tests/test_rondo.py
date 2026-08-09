@@ -99,6 +99,31 @@ class RondoTests(unittest.TestCase):
         self.assertIn('command="codex-session"', layout)
         self.assertIn('tab name="shell"', layout)
 
+    def test_agent_message_is_pasted_and_submitted_to_named_pane(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["send_agent_message"].__globals__
+        panes = json.dumps(
+            [
+                {"id": 1, "title": "claude", "tab_name": "agents", "is_plugin": False, "exited": False},
+                {"id": 2, "title": "codex", "tab_name": "agents", "is_plugin": False, "exited": False},
+            ]
+        )
+        listed = subprocess.CompletedProcess([], 0, stdout=panes)
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.object(scope["subprocess"], "run", side_effect=[listed, None, None]) as run,
+        ):
+            rondo["send_agent_message"]("codex", ["review", "the", "diff"])
+
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["zellij", "action", "paste", "--pane-id", "2", "--", "review the diff"],
+        )
+        self.assertEqual(
+            run.call_args_list[2].args[0],
+            ["zellij", "action", "send-keys", "--pane-id", "2", "Enter"],
+        )
+
 
 class RelayTests(unittest.TestCase):
     def setUp(self):
@@ -162,6 +187,24 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(len(packets), 1)
         index = json.loads((directory / "pending.json").read_text())
         self.assertEqual(index["status"], "ready")
+
+    def test_auto_relay_sends_visible_prompt_to_codex_pane(self):
+        relay = load_script("rondo-relay", self.config, self.cache)
+        directory = relay["relay_dir"](self.repo)
+        packet = directory / "packets" / "handoff.md"
+        packet.parent.mkdir(parents=True)
+        packet.write_text("handoff")
+        result = subprocess.CompletedProcess([], 0, stdout="sent\n", stderr="")
+        scope = relay["run_auto"].__globals__
+
+        with patch.object(scope["subprocess"], "run", return_value=result) as run:
+            self.assertEqual(relay["run_auto"](directory, packet, self.repo), 0)
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[1:3], ["send", "codex"])
+        self.assertIn(str(packet), command[3])
+        index = json.loads((directory / "pending.json").read_text())
+        self.assertEqual(index["status"], "sent")
 
     def test_claude_status_triggers_ready_packet(self):
         config = self.config / "rondo"

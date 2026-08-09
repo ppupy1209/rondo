@@ -31,10 +31,13 @@ cd ~/projects/my-project
 rondo             # open or attach to the project's persistent workspace
 rondo setup       # choose language, agents, and relay behavior
 rondo add         # select and add another agent pane
+rondo send codex "Review the current diff"  # type and submit in the Codex pane
 rondo doctor      # diagnose dependencies and configuration
 ```
 
 `rondo setup` is a real selector: move with arrow keys, toggle agents with Space, and save with Enter. Agent names never need to be typed.
+
+Any agent can run `rondo send` through its shell tool. Manual prompts, agent delegation, and automatic relay therefore use the same visible terminal-input path.
 
 ```text
 ┌────────────────────────────────────────────────────┐
@@ -55,7 +58,7 @@ The first selected agent gets the left half. Additional agents stack on the righ
 2. It builds a layout from `~/.config/rondo/panels` and launches each native CLI in the same working tree.
 3. `rondo-status` reads local CLI state every five seconds and renders only the panes that are open.
 4. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
-5. When Claude reaches the configured usage threshold, Rondo can create a continuity packet or let Codex continue automatically.
+5. Agents can send visible prompts to one another with `rondo send`; automatic Claude → Codex relay uses the same path.
 
 The agents do not share a vendor chat session. They share the real project directory, Git state, a persistent terminal workspace, and a small provider-neutral continuity packet.
 
@@ -79,7 +82,7 @@ A continuity packet contains:
 
 Packets live under `~/.cache/rondo/relay/`, use file mode `0600`, redact common token formats, and are deduplicated per Claude session and reset window. They are never committed. In `ready` mode, nothing is sent to Codex until you run `rondo continue`.
 
-`auto` is deliberately opt-in. It runs `codex exec` with the `workspace-write` sandbox, no network flag, no approval bypass, and instructions that forbid pushing, deploying, remote changes, and destructive operations. Output is saved beside the packet.
+`auto` is deliberately opt-in. Rondo types a visible handoff prompt into the existing Codex pane and submits it exactly like terminal input. The prompt points to the private packet and keeps the safety contract visible to Codex.
 
 ## Supported agents
 
@@ -100,6 +103,7 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo` | Open or attach to the current project's session |
 | `rondo setup` | Choose language, panes, and relay mode |
 | `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
+| `rondo send <agent> <message>` | Type and submit a visible prompt in that agent's pane |
 | `rondo language` | Switch Korean / English |
 | `rondo relay [off\|ready\|auto]` | Inspect or change the continuity strategy |
 | `rondo continue` | Claim the pending packet in interactive Codex |
