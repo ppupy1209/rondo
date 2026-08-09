@@ -1,5 +1,2 @@
 #!/bin/sh
-# Codex 는 세션 종료 훅 이벤트가 없다(pre_tool_use·session_start·subagent_stop 등만 존재).
-# 그래서 codex 를 감싸 종료 직후 handoff 를 실행한다. zellij 레이아웃이 이 스크립트를 띄운다.
-codex "$@"
-handoff Codex
+exec rondo-agent-session codex "$@"

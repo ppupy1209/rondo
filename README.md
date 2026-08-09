@@ -105,10 +105,37 @@ The packet includes a cropped screenshot around the selection, sanitized DOM and
 
 Lens launches an isolated Chrome, Chromium, or Microsoft Edge profile and deletes that temporary profile when the selection ends. Set `RONDO_BROWSER=/path/to/browser` if the browser is not discovered automatically.
 
+## Handoff and resume
+
+Rondo restores work differently depending on where you continue.
+
+### Same computer, including after a reboot
+
+Run `rondo` again in the same repository. Rondo resurrects the saved zellij workspace, then Claude Code continues the latest conversation for that directory with `--continue` and Codex continues it with `resume --last`. If a provider has no saved conversation, its pane starts a fresh one instead.
+
+### Another computer
+
+Before leaving computer A, create a small provider-neutral handoff:
+
+```sh
+rondo handoff "Finish the login tests and review the current diff"
+git add .rondo/handoff.md
+git commit -m "docs: add Rondo handoff"
+git push
+```
+
+After cloning or pulling on computer B:
+
+```sh
+rondo resume codex       # or: rondo resume claude
+```
+
+The target pane receives a visible prompt pointing to `.rondo/handoff.md`. The file contains only your note, origin, branch, HEAD, working-tree filenames/statistics, and recent commits. Rondo does not copy vendor transcripts, credentials, or local paths into Git. Uncommitted code is not transferred, so commit and push the actual work as well as the handoff file.
+
 ## How it works
 
 1. `rondo` resolves the current Git root and keys one zellij session by its `origin` URL plus the local clone path.
-2. It builds a layout from `~/.config/rondo/panels` and launches each native CLI in the same working tree.
+2. It builds a layout from `~/.config/rondo/panels` and launches each native CLI in the same working tree. Saved zellij sessions and supported vendor conversations are resumed after a reboot.
 3. `rondo-status` reads local CLI state every five seconds and renders only the panes that are open.
 4. `rondo send` targets a pane by its Rondo name and submits a visible prompt through zellij.
 5. `rondo lens` captures one selected UI element into a private local packet and sends it only after confirmation.
@@ -159,6 +186,8 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo setup` | Choose language, panes, and relay mode |
 | `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
 | `rondo send <agent> <message>` | Type and submit a visible prompt in that agent's pane |
+| `rondo handoff [note]` | Create `.rondo/handoff.md` for another computer |
+| `rondo resume [claude\|codex]` | Open the workspace and deliver the handoff to one agent |
 | `rondo lens [URL]` | Click a UI element and send its focused context after confirmation |
 | `rondo language` | Switch Korean / English |
 | `rondo relay [off\|ready\|auto]` | Inspect or change the continuity strategy |
@@ -169,9 +198,9 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 
 Inside zellij: `Ctrl+p` + arrows moves panes, `Ctrl+t` + arrows moves tabs, and `Ctrl+o` then `d` detaches.
 
-## Optional Git handoff log
+## Optional commit history log
 
-On macOS/Linux, run `handoff --init` in a repository to create `docs/handoff.md`. On session end, Rondo records commit subjects made since the previous handoff. It keeps the latest 20 entries in the active section and archives older entries instead of deleting them. This optional shell-based log is not installed on Windows; the shared workspace, visible delegation, Lens, and continuity relay are available there.
+This is separate from the cross-computer `rondo handoff` command above. On macOS/Linux, `handoff --init` creates `docs/handoff.md`. On session end, Rondo records commit subjects made since the previous handoff. It keeps the latest 20 entries in the active section and archives older entries instead of deleting them. This optional shell-based log is not installed on Windows; `rondo handoff` and `rondo resume` work on Windows too.
 
 The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/handoff.md`. Repositories without one of these files are left untouched.
 
@@ -199,7 +228,7 @@ No telemetry is included. Rondo does not store credentials. A relay excerpt can 
 
 ```sh
 python3 -m unittest discover -s tests -v
-python3 -m py_compile bin/rondo bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
+python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
 

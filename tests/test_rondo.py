@@ -69,7 +69,7 @@ class RondoTests(unittest.TestCase):
         self.assertEqual(active, {"working"})
         self.assertEqual(exited, {"rondo-project"})
 
-    def test_exited_rondo_session_is_recreated_with_current_layout(self):
+    def test_exited_rondo_session_is_resurrected(self):
         rondo = load_script("rondo", self.config, self.cache)
         rondo["write_setting"]("panels", "claude")
         scope = rondo["open_session"].__globals__
@@ -86,19 +86,16 @@ class RondoTests(unittest.TestCase):
                 },
             ),
             patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
-            patch.object(scope["subprocess"], "run") as run,
-            patch.object(scope["os"], "chdir"),
+            patch.object(scope["os"], "chdir") as chdir,
             patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
         ):
             with self.assertRaisesRegex(RuntimeError, "stop"):
                 rondo["open_session"]()
 
-        run.assert_called_once_with(
-            ["zellij", "delete-session", "rondo-project"], check=True
-        )
+        chdir.assert_called_once_with(Path("/tmp/project"))
         execvp.assert_called_once_with(
             "zellij",
-            ["zellij", "-s", "rondo-project", "-n", str(Path("/tmp/layout.kdl"))],
+            ["zellij", "attach", "--force-run-commands", "rondo-project"],
         )
 
     def test_settings_are_atomic_and_private(self):
@@ -124,6 +121,7 @@ class RondoTests(unittest.TestCase):
         layout = rondo["write_layout"](["claude", "codex", "gemini"]).read_text()
         suffix = ".cmd" if os.name == "nt" else ""
         self.assertIn(f'command="rondo-status{suffix}"', layout)
+        self.assertIn(f'command="claude-session{suffix}"', layout)
         self.assertIn(f'command="codex-session{suffix}"', layout)
         self.assertIn('tab name="shell"', layout)
 
@@ -131,8 +129,9 @@ class RondoTests(unittest.TestCase):
         rondo = load_script("rondo", self.config, self.cache)
         scope = rondo["write_layout"].__globals__
         with patch.dict(scope, {"WINDOWS": True}):
-            layout = rondo["write_layout"](["codex", "gemini"]).read_text()
+            layout = rondo["write_layout"](["claude", "codex", "gemini"]).read_text()
         self.assertIn('command="rondo-status.cmd"', layout)
+        self.assertIn('command="claude-session.cmd"', layout)
         self.assertIn('command="codex-session.cmd"', layout)
         self.assertIn('command="agy-session.cmd"', layout)
 
@@ -169,6 +168,73 @@ class RondoTests(unittest.TestCase):
             ["zellij", "action", "send-keys", "--pane-id", "2", "Enter"],
         )
 
+    def test_agent_message_can_target_an_existing_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["send_agent_message"].__globals__
+        panes = json.dumps(
+            [{"id": 7, "title": "codex", "tab_name": "agents", "is_plugin": False, "exited": False}]
+        )
+        listed = subprocess.CompletedProcess([], 0, stdout=panes)
+        with patch.object(scope["subprocess"], "run", side_effect=[listed, None, None]) as run:
+            rondo["send_agent_message"]("codex", ["continue"], session_name="rondo-project")
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["zellij", "-s", "rondo-project", "action", "paste", "--pane-id", "7", "--", "continue"],
+        )
+
+    def test_handoff_creates_a_git_portable_context_file(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        repo = self.base / "repo"
+        repo.mkdir()
+        scope = rondo["handoff_command"].__globals__
+        outputs = {
+            ("branch", "--show-current"): "main",
+            ("rev-parse", "--short", "HEAD"): "abc1234",
+            ("status", "--short"): " M app.py",
+            ("diff", "--stat"): " app.py | 2 ++",
+            ("log", "-5", "--pretty=format:%h %s"): "abc1234 feat: work",
+        }
+        with patch.dict(
+            scope,
+            {
+                "repo_root": lambda: repo,
+                "git_origin": lambda _root: "git@github.com:me/project",
+                "git_output": lambda _root, *args, **_kwargs: outputs.get(args, ""),
+            },
+        ):
+            self.assertEqual(rondo["handoff_command"](["Finish", "tests"]), 0)
+        document = (repo / ".rondo" / "handoff.md").read_text()
+        self.assertIn("Finish tests", document)
+        self.assertIn("Branch: main", document)
+        self.assertIn(" M app.py", document)
+        self.assertNotIn(str(repo), document)
+
+    def test_resume_passes_the_handoff_to_the_selected_agent(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        rondo["write_setting"]("panels", "claude codex")
+        repo = self.base / "repo"
+        packet = repo / ".rondo" / "handoff.md"
+        packet.parent.mkdir(parents=True)
+        packet.write_text("handoff")
+        scope = rondo["resume_command"].__globals__
+        with (
+            patch.dict(scope, {"repo_root": lambda: repo, "installed": lambda _name: True}),
+            patch.dict(scope["os"].environ, {}, clear=False),
+            patch.object(scope["open_session"].__globals__["os"], "execvp"),
+            patch.object(scope["open_session"].__globals__["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["open_session"].__globals__["subprocess"], "run"),
+            patch.dict(
+                scope,
+                {
+                    "open_session": unittest.mock.Mock(),
+                },
+            ),
+        ):
+            opener = scope["open_session"]
+            rondo["resume_command"]("codex")
+            opener.assert_called_once_with(resume_agent="codex", handoff=packet)
+            self.assertEqual(scope["os"].environ["RONDO_RESUME_AGENT"], "codex")
+
     def test_lens_command_executes_the_companion_cli(self):
         rondo = load_script("rondo", self.config, self.cache)
         scope = rondo["open_lens"].__globals__
@@ -181,6 +247,48 @@ class RondoTests(unittest.TestCase):
             expected.insert(0, sys.executable)
             program = sys.executable
         execv.assert_called_once_with(program, expected)
+
+
+class AgentSessionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.runner = load_script("rondo-agent-session", self.base / "config", self.base / "cache")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_claude_resumes_and_falls_back_when_no_session_exists(self):
+        packet = self.base / "handoff.md"
+        packet.write_text("continue")
+        scope = self.runner["run"].__globals__
+        missing = subprocess.CompletedProcess([], 1)
+        fresh = subprocess.CompletedProcess([], 0)
+        environment = {
+            "RONDO_RESUME_AGENT": "claude",
+            "RONDO_HANDOFF_FILE": str(packet),
+            "RONDO_LANG": "en",
+        }
+        with (
+            patch.dict(scope["os"].environ, environment, clear=False),
+            patch.object(scope["shutil"], "which", side_effect=lambda name: f"/bin/{name}" if name == "claude" else None),
+            patch.object(scope["subprocess"], "run", side_effect=[missing, fresh]) as run,
+        ):
+            self.assertEqual(self.runner["run"]("claude", []), 0)
+        self.assertEqual(run.call_args_list[0].args[0][:2], ["/bin/claude", "--continue"])
+        self.assertEqual(run.call_args_list[1].args[0][0], "/bin/claude")
+        self.assertIn(str(packet), run.call_args_list[0].args[0][-1])
+
+    def test_codex_resumes_latest_session_for_the_current_directory(self):
+        scope = self.runner["run"].__globals__
+        done = subprocess.CompletedProcess([], 0)
+        with (
+            patch.dict(scope["os"].environ, {}, clear=True),
+            patch.object(scope["shutil"], "which", side_effect=lambda name: f"/bin/{name}" if name == "codex" else None),
+            patch.object(scope["subprocess"], "run", return_value=done) as run,
+        ):
+            self.assertEqual(self.runner["run"]("codex", []), 0)
+        run.assert_called_once_with(["/bin/codex", "resume", "--last"])
 
 
 class LensTests(unittest.TestCase):

@@ -95,12 +95,22 @@ function Write-PythonLauncher([string]$Name, [string]$Script) {
     "rondo" = "rondo"; "ai" = "rondo";
     "ai-status" = "ai-status"; "rondo-status" = "ai-status";
     "rondo-claude-status" = "rondo-claude-status"; "claude-statusline" = "rondo-claude-status";
-    "rondo-lens" = "rondo-lens"; "rondo-relay" = "rondo-relay"
+    "rondo-lens" = "rondo-lens"; "rondo-relay" = "rondo-relay";
+    "rondo-agent-session" = "rondo-agent-session"
 }.GetEnumerator() | ForEach-Object { Write-PythonLauncher $_.Key $_.Value }
 
+function Write-AgentLauncher([string]$Name, [string]$Agent) {
+    $target = Join-Path $Bin "$Name.cmd"
+    $source = Join-Path $Repo "bin\rondo-agent-session"
+    $content = "@echo off`r`nchcp 65001 >nul`r`n`"$Python`" `"$source`" $Agent %*`r`n"
+    [IO.File]::WriteAllText($target, $content, [Text.UTF8Encoding]::new($false))
+}
+
+Write-AgentLauncher "claude-session" "claude"
+Write-AgentLauncher "codex-session" "codex"
+
 @{
-    "codex-session" = "codex"; "agy-session" = "agy";
-    "kimi-session" = "kimi"; "grok-session" = "grok"
+    "agy-session" = "agy"; "kimi-session" = "kimi"; "grok-session" = "grok"
 }.GetEnumerator() | ForEach-Object {
     $content = "@echo off`r`ncall $($_.Value) %*`r`n"
     [IO.File]::WriteAllText((Join-Path $Bin "$($_.Key).cmd"), $content, [Text.UTF8Encoding]::new($false))

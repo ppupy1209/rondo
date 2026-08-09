@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Launch an agent, resuming its latest conversation for this working directory."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+COMMANDS = {
+    "claude": (("claude", "--continue"), ("claude",)),
+    "codex": (("codex", "resume", "--last"), ("codex",)),
+}
+
+
+def executable(command: tuple[str, ...]) -> list[str]:
+    binary = shutil.which(command[0]) or command[0]
+    argv = [binary, *command[1:]]
+    if os.name == "nt" and Path(binary).suffix.lower() in (".cmd", ".bat"):
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *argv]
+    return argv
+
+
+def handoff_prompt(agent: str) -> str | None:
+    if os.environ.get("RONDO_RESUME_AGENT") != agent:
+        return None
+    path = Path(os.environ.get("RONDO_HANDOFF_FILE", ""))
+    if not path.is_file():
+        return None
+    if os.environ.get("RONDO_LANG") == "ko":
+        return f"[Rondo resume] 다음 인계 파일을 읽고 현재 작업을 이어서 완료하세요: {path}"
+    return f"[Rondo resume] Read this handoff file and continue the current work: {path}"
+
+
+def run(agent: str, extra: list[str]) -> int:
+    resume, fresh = COMMANDS[agent]
+    prompt = handoff_prompt(agent)
+    tail = [*extra, *([prompt] if prompt else [])]
+    result = subprocess.run([*executable(resume), *tail])
+    if result.returncode == 1:
+        result = subprocess.run([*executable(fresh), *tail])
+
+    hook = shutil.which("handoff")
+    if hook and os.name != "nt":
+        subprocess.run([hook, "Claude" if agent == "claude" else "Codex"], check=False)
+    return result.returncode
+
+
+def main() -> int:
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        print("usage: rondo-agent-session claude|codex [args...]", file=sys.stderr)
+        return 2
+    return run(sys.argv[1], sys.argv[2:])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

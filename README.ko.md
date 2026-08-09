@@ -105,10 +105,37 @@ rondo lens https://staging.example.com --allow-remote
 
 Lens는 격리된 Chrome, Chromium 또는 Microsoft Edge 프로필을 열고 선택이 끝나면 임시 프로필을 삭제합니다. 브라우저를 자동으로 찾지 못하면 `RONDO_BROWSER=/브라우저/실행파일/경로`를 지정할 수 있습니다.
 
+## Handoff와 Resume
+
+어디에서 이어서 작업하는지에 따라 복원 방법이 다릅니다.
+
+### 같은 PC, 재부팅한 경우 포함
+
+같은 저장소에서 다시 `rondo`를 실행하면 됩니다. Rondo가 저장된 zellij 작업공간을 되살리고, Claude Code는 `--continue`, Codex는 `resume --last`로 그 디렉터리의 최근 대화를 이어갑니다. 저장된 대화가 없는 에이전트는 새 대화로 시작합니다.
+
+### 다른 PC
+
+A PC에서 작업을 마치기 전에 벤더에 종속되지 않는 인계 파일을 만듭니다.
+
+```sh
+rondo handoff "로그인 테스트를 마무리하고 현재 diff를 검토"
+git add .rondo/handoff.md
+git commit -m "docs: Rondo 인계 추가"
+git push
+```
+
+B PC에서 clone 또는 pull한 다음 실행합니다.
+
+```sh
+rondo resume codex       # 또는: rondo resume claude
+```
+
+선택한 패널에 `.rondo/handoff.md`를 읽으라는 요청이 화면에 보이게 전달됩니다. 이 파일에는 사용자가 적은 메모, origin, 브랜치, HEAD, 작업 트리 파일명·통계, 최근 커밋만 들어갑니다. Rondo는 벤더의 대화 원문, 인증정보, 로컬 경로를 Git에 넣지 않습니다. 커밋하지 않은 코드는 다른 PC로 넘어가지 않으므로 실제 변경분과 인계 파일을 함께 커밋하고 푸시해야 합니다.
+
 ## 동작 방식
 
 1. `rondo`가 현재 Git 루트를 찾고 `origin` 주소와 로컬 clone 경로를 조합해 프로젝트별 zellij 세션 하나에 연결합니다.
-2. `~/.config/rondo/panels`에 저장된 선택으로 레이아웃을 만들고, 같은 작업 트리에서 각 CLI를 실행합니다.
+2. `~/.config/rondo/panels`에 저장된 선택으로 레이아웃을 만들고, 같은 작업 트리에서 각 CLI를 실행합니다. 재부팅 후에는 저장된 zellij 세션과 지원되는 벤더 대화를 다시 엽니다.
 3. `rondo-status`가 5초마다 로컬 CLI 상태를 읽어 실제로 열린 패널만 표시합니다.
 4. `rondo send`가 Rondo 패널 이름으로 대상을 찾아 zellij를 통해 보이는 요청을 전달합니다.
 5. `rondo lens`가 선택한 화면 요소 하나를 비공개 로컬 패킷으로 만들고 확인 후에만 전달합니다.
@@ -159,6 +186,8 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo setup` | 언어·패널·인계 모드 선택 |
 | `rondo add [agent]` | 패널 추가, 인자를 생략하면 선택 화면 표시 |
 | `rondo send <agent> <message>` | 대상 패널에 보이는 요청을 입력하고 전송 |
+| `rondo handoff [메모]` | 다른 PC로 옮길 `.rondo/handoff.md` 생성 |
+| `rondo resume [claude\|codex]` | 작업공간을 열고 선택한 에이전트에 인계 전달 |
 | `rondo lens [URL]` | 화면 요소를 클릭하고 확인 후 해당 맥락만 전달 |
 | `rondo language` | 한국어 / English 변경 |
 | `rondo relay [off\|ready\|auto]` | 인계 전략 확인 / 변경 |
@@ -169,9 +198,9 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 
 zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 탭 이동, `Ctrl+o` 다음 `d`로 디태치합니다.
 
-## 선택적인 Git 핸드오프 로그
+## 선택적인 커밋 이력 로그
 
-macOS/Linux의 저장소에서 `handoff --init`을 실행하면 `docs/handoff.md`가 생깁니다. 에이전트 세션이 끝날 때 직전 핸드오프 이후의 커밋 제목을 기록합니다. 최신 20개만 활성 섹션에 두고, 오래된 항목은 지우지 않고 archive로 옮깁니다. 이 선택형 셸 로그는 Windows에 설치하지 않으며, 공통 작업공간·화면에 보이는 위임·Lens·연속 작업 인계는 Windows에서도 사용할 수 있습니다.
+위의 PC 간 `rondo handoff`와는 별도 기능입니다. macOS/Linux에서 `handoff --init`을 실행하면 `docs/handoff.md`가 생기고, 에이전트 세션이 끝날 때 직전 핸드오프 이후의 커밋 제목을 기록합니다. 최신 20개만 활성 섹션에 두고 오래된 항목은 지우지 않고 archive로 옮깁니다. 이 선택형 셸 로그는 Windows에 설치하지 않지만 `rondo handoff`와 `rondo resume`은 Windows에서도 동작합니다.
 
 대상 탐색 순서는 `$HANDOFF_FILE`, `docs/collab/status.md`, `docs/handoff.md`입니다. 이 파일이 없는 저장소는 건드리지 않습니다.
 
@@ -199,7 +228,7 @@ macOS/Linux의 저장소에서 `handoff --init`을 실행하면 `docs/handoff.md
 
 ```sh
 python3 -m unittest discover -s tests -v
-python3 -m py_compile bin/rondo bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
+python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
 
