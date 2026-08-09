@@ -2,6 +2,7 @@ import json
 import os
 import runpy
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -78,7 +79,8 @@ class RondoTests(unittest.TestCase):
             ["zellij", "delete-session", "rondo-project"], check=True
         )
         execvp.assert_called_once_with(
-            "zellij", ["zellij", "-s", "rondo-project", "-n", "/tmp/layout.kdl"]
+            "zellij",
+            ["zellij", "-s", "rondo-project", "-n", str(Path("/tmp/layout.kdl"))],
         )
 
     def test_settings_are_atomic_and_private(self):
@@ -86,7 +88,8 @@ class RondoTests(unittest.TestCase):
         rondo["write_setting"]("language", "ko")
         path = self.config / "rondo" / "language"
         self.assertEqual(path.read_text(), "ko\n")
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_legacy_panels_migrate_once(self):
         legacy = self.config / "ai-tools"
@@ -219,7 +222,7 @@ class LensTests(unittest.TestCase):
         self.assertIn("node.removeAttribute('value')", script)
         self.assertIn("url: `${location.origin}${location.pathname}`", script)
         self.assertNotIn("__RONDO_LENS_BANNER__", self.lens["selection_script"]())
-        source = Path(ROOT / "bin" / "rondo-lens").read_text()
+        source = Path(ROOT / "bin" / "rondo-lens").read_text(encoding="utf-8")
         self.assertIn("input,textarea,select,[contenteditable]", source)
 
     def test_page_readiness_retries_a_replaced_execution_context(self):
@@ -307,8 +310,8 @@ class RelayTests(unittest.TestCase):
             self.assertEqual(relay["run_auto"](directory, packet, self.repo), 0)
 
         command = run.call_args.args[0]
-        self.assertEqual(command[1:3], ["send", "codex"])
-        self.assertIn(str(packet), command[3])
+        self.assertEqual(command[-3:-1], ["send", "codex"])
+        self.assertIn(str(packet), command[-1])
         index = json.loads((directory / "pending.json").read_text())
         self.assertEqual(index["status"], "sent")
 

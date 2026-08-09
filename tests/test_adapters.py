@@ -47,14 +47,16 @@ class CodexModelTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.other = self.root / "other"
         self.db = self.root / "state.sqlite"
         make_state_db(
             self.db,
             [
-                ("/repo", "user", "gpt-5.6-sol", "xhigh", 200),
+                (str(self.repo), "user", "gpt-5.6-sol", "xhigh", 200),
                 # 더 최근이지만 서브에이전트 행이다. 골라지면 안 된다.
-                ("/repo", "subagent", "codex-auto-review", None, 300),
-                ("/other", "user", "gpt-other", None, 400),
+                (str(self.repo), "subagent", "codex-auto-review", None, 300),
+                (str(self.other), "user", "gpt-other", None, 400),
             ],
         )
         self.patch = mock.patch.object(codex, "STATE_DB", self.db)
@@ -66,12 +68,12 @@ class CodexModelTest(unittest.TestCase):
 
     def test_subagent_rows_excluded(self) -> None:
         with mock.patch.object(codex, "read_limits", return_value=([], None)):
-            snap = codex.CodexAdapter().snapshot(Path("/repo"))
+            snap = codex.CodexAdapter().snapshot(self.repo)
         self.assertEqual(snap.model, "gpt-5.6-sol xhigh")
 
     def test_other_repo_not_used(self) -> None:
         with mock.patch.object(codex, "read_limits", return_value=([], None)):
-            snap = codex.CodexAdapter().snapshot(Path("/repo-없음"))
+            snap = codex.CodexAdapter().snapshot(self.root / "repo-없음")
         self.assertIsNone(snap.model)
 
 
@@ -207,6 +209,8 @@ class ClaudeAdapterTest(unittest.TestCase):
         self.claude = claude
         self.tmp = tempfile.TemporaryDirectory()
         cache = Path(self.tmp.name)
+        self.repo = cache / "repo"
+        self.other = cache / "other"
         mock.patch.object(claude, "CACHE", cache).start()
         mock.patch.object(claude, "LIMITS", cache / "claude-limits.json").start()
 
@@ -219,7 +223,7 @@ class ClaudeAdapterTest(unittest.TestCase):
         data = {
             "model": {"display_name": "Opus 5"},
             "effort": {"level": "high"},
-            "workspace": {"project_dir": "/repo"},
+            "workspace": {"project_dir": str(self.repo)},
             "rate_limits": {
                 "five_hour": {"used_percentage": 72, "resets_at": reset},
                 "seven_day": {"used_percentage": 36, "resets_at": reset},
@@ -247,7 +251,9 @@ class ClaudeAdapterTest(unittest.TestCase):
     def test_limits_are_account_wide_not_per_repo(self) -> None:
         # /repo 에서 한도를 받고, 아직 메시지를 안 보낸 /other 에서도 보여야 한다
         self.claude.write_cache(self.payload())
-        self.claude.write_cache(self.payload(workspace={"project_dir": "/other"}, rate_limits={}))
+        self.claude.write_cache(
+            self.payload(workspace={"project_dir": str(self.other)}, rate_limits={})
+        )
         windows, age = self.claude.cached_limits()
         self.assertEqual([w.label for w in windows], ["5h", "wk"])
         self.assertLess(age, 5)
@@ -261,21 +267,21 @@ class ClaudeAdapterTest(unittest.TestCase):
     def test_model_is_scoped_to_its_repo(self) -> None:
         self.claude.write_cache(self.payload())
         adapter = self.claude.ClaudeAdapter()
-        self.assertEqual(adapter.snapshot(Path("/repo")).model, "Opus 5 high")
-        self.assertIsNone(adapter.snapshot(Path("/other")).model)
+        self.assertEqual(adapter.snapshot(self.repo).model, "Opus 5 high")
+        self.assertIsNone(adapter.snapshot(self.other).model)
 
     def test_stale_model_is_dropped_but_limits_stay(self) -> None:
         self.claude.write_cache(self.payload())
-        path = self.claude.CACHE / f"claude.{self.claude.repo_key('/repo')}.json"
+        path = self.claude.CACHE / f"claude.{self.claude.repo_key(self.repo)}.json"
         data = json.loads(path.read_text())
         data["at"] = time.time() - self.claude.STALE_MODEL - 10
         path.write_text(json.dumps(data))
-        snap = self.claude.ClaudeAdapter().snapshot(Path("/repo"))
+        snap = self.claude.ClaudeAdapter().snapshot(self.repo)
         self.assertIsNone(snap.model)
         self.assertEqual(len(snap.live_windows()), 2)
 
     def test_missing_cache_explains_itself(self) -> None:
-        snap = self.claude.ClaudeAdapter().snapshot(Path("/repo"))
+        snap = self.claude.ClaudeAdapter().snapshot(self.repo)
         self.assertIsNone(snap.model)
         self.assertIn("Claude 패널", snap.error)
 
