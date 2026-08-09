@@ -5,12 +5,16 @@
 
   claude  statusLine 이 남긴 캐시 (모델 · 컨텍스트% · 5시간/주간 한도)
   codex   ~/.codex/state_5.sqlite 의 threads (모델 · 누적 토큰)
-  agy·kimi·grok  로컬에 사용량 상태를 남기지 않음 — '-' 로 표시
+  antigravity·gemini·kimi·grok  로컬에 사용량 상태를 남기지 않음 — "-" 로 표시
+
+열려 있는 패널만 표시한다(zellij dump-layout 기준).
 
 한 번만 출력하려면 --once.
 """
 import json
 import os
+import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -105,23 +109,55 @@ def codex_field(root):
     return " ".join(bits)
 
 
+# 패널 이름 -> 값을 읽는 함수. 값이 없는 CLI 는 로컬에 상태를 안 남긴다.
+AGENTS = [
+    ("claude", claude_field),
+    ("codex", codex_field),
+    ("antigravity", None),
+    ("gemini", None),
+    ("kimi", None),
+    ("grok", None),
+]
+
+
+def open_panes():
+    """현재 세션에 열려 있는 패널 이름. zellij 밖이면 None."""
+    if not os.environ.get("ZELLIJ_SESSION_NAME"):
+        return None
+    try:
+        out = subprocess.run(
+            ["zellij", "action", "dump-layout"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return set(re.findall(r'name="([a-z-]+)"', out.stdout))
+
+
 def line(root):
-    fields = [
-        ("claude", claude_field(root)),
-        ("codex", codex_field(root)),
-        ("agy", None),
-        ("kimi", None),
-        ("grok", None),
-    ]
-    return "   ".join(f"{name} {value or '-'}" for name, value in fields)
+    panes = open_panes()
+    parts = []
+    for name, reader in AGENTS:
+        if panes is not None and name not in panes:
+            continue
+        value = reader(root) if reader else None
+        parts.append(f"{name} {value or '-'}")
+    return "   ".join(parts) or "패널 없음"
 
 
 def main():
     root = repo_root()
     once = "--once" in sys.argv
     while True:
-        # 커서를 좌상단으로 보내고 줄을 지운 뒤 다시 그린다 (1행 패널용)
-        sys.stdout.write("\033[H\033[2K" + line(root))
+        text = line(root)
+        # 1행 패널이라 폭을 넘으면 줄바꿈돼 깨진다. 잘라낸다.
+        width = shutil.get_terminal_size(fallback=(80, 24)).columns
+        if len(text) > width:
+            text = text[: max(0, width - 1)]
+        # 커서를 좌상단으로 보내고 줄을 지운 뒤 다시 그린다
+        sys.stdout.write("\033[H\033[2K" + text)
         sys.stdout.flush()
         if once:
             print()

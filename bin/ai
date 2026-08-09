@@ -32,6 +32,10 @@ case "${1:-}" in
         label=${spec#* }
         command -v "$cmd" >/dev/null 2>&1 || { echo "$cmd 미설치 — README 설치 안내 참고" >&2; exit 1; }
         [ -n "${ZELLIJ:-}" ] || { echo "zellij 세션 안에서 실행할 것 ('ai' 로 세션 먼저 열기)" >&2; exit 1; }
+        # ai 탭으로 옮기고, 1행짜리 상태 바가 쪼개지지 않도록 포커스를 아래로 내린다.
+        # new-pane 은 포커스된 패널을 분할하므로 이 두 줄이 없으면 상태 바가 조각난다.
+        zellij action go-to-tab-name ai >/dev/null 2>&1 || true
+        zellij action move-focus down >/dev/null 2>&1 || true
         # 종료 후 handoff 까지 실행. 세션 종료 훅이 있는 CLI 도 한 번 더 도는 것은 무해하다(멱등).
         exec zellij action new-pane --name "$name" -- sh -c "$cmd; handoff $label"
         ;;

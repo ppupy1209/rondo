@@ -149,11 +149,17 @@ Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. �
 
 ## `ai-status` — 상단 통합 바
 
-`ai` 세션 최상단 1행. 5초마다 갱신.
+`ai` 세션 최상단 1행. 5초마다 갱신. **열려 있는 패널만** 표시한다 — `zellij action dump-layout` 의 패널 이름을 읽어 거른다.
 
 ```
-claude Opus 5 ctx 29% 5h 41%(2h11m) wk 63%(3d5h)   codex gpt-5.6-sol xhigh 43.4M tok   agy -   kimi -   grok -
+# 기본 3패널
+claude Sonnet 5   codex gpt-5.6-sol xhigh 45.2M tok   antigravity -
+
+# ai add kimi / ai add grok 후
+claude Sonnet 5   codex gpt-5.6-sol xhigh 45.2M tok   antigravity -   kimi -   grok -
 ```
+
+패널이 좁으면 줄바꿈으로 깨지므로 폭에 맞춰 잘라낸다. zellij 밖에서 `--once` 로 실행하면 전부 보여준다.
 
 각 CLI 가 **로컬에 남기는 것만** 읽는다. 저장된 자격증명으로 API 를 호출하지 않는다.
 
