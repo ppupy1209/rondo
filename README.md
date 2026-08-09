@@ -58,12 +58,18 @@ zellij 세션 안에서 실행한다(보통 `shell` 탭). 종료 후 `handoff` �
 
 | 에이전트 | 명령 | 기본 레이아웃 | 설치 |
 |---|---|---|---|
-| Claude Code | `claude` | ✓ | 설치됨 |
-| Codex CLI | `codex` | ✓ | 설치됨 |
+| Claude Code | `claude` | ✓ | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| Codex CLI | `codex` | ✓ | `npm install -g @openai/codex` |
 | Antigravity CLI | `agy` | ✓ | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
-| Gemini CLI | `gemini` | | 설치됨 (Antigravity 로 대체됨) |
-| Kimi Code CLI | `kimi` | | `npm install -g @kimi-code/cli` |
+| Gemini CLI | `gemini` | | `npm install -g @google/gemini-cli` (Antigravity 의 전신) |
+| Kimi Code CLI | `kimi` | | `curl -fsSL https://code.kimi.com/kimi-code/install.sh \| bash` |
 | Grok Build | `grok` | | `curl -fsSL https://x.ai/cli/install.sh \| bash` |
+
+기본 레이아웃에 3개만 두는 이유: 한 화면에 5개면 패널당 40열 남짓이라 TUI 가 깨진다. 나머지는 `ai add` 로 필요할 때만.
+
+> **npm 이름 주의.** Kimi 와 Grok 은 npm 에 공식 패키지가 없다. `@kimi-code/cli` 는 존재하지 않고, `kimi-cli`(0.0.2) 와 `@xai-official/grok`(1.0.0) 은 저장소 URL 도 없는 별개 패키지다. [xai-org/grok-build](https://github.com/xai-org/grok-build) 는 "npm 패키지 없음(Rust 프로젝트)"이라고 명시한다. 위 표의 공식 설치 스크립트만 쓸 것.
+
+설치 위치가 서로 다르다 — `kimi` 는 `~/.kimi-code/bin`, `grok` 은 `~/.grok/bin`. 각 설치 스크립트가 `~/.zshrc` 에 PATH 를 추가하므로 설치 후 새 터미널을 열어야 `ai add` 가 찾는다.
 
 대상을 늘리려면 `bin/ai` 의 `agent_cmd()` 에 한 줄 추가하면 된다.
 
