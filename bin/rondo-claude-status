@@ -17,6 +17,8 @@ from rondo.paths import CACHE, atomic_json, read_json, repo_key, setting  # noqa
 
 BAR_CELLS = 8
 WINDOWS = os.name == "nt"
+if WINDOWS:
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 def battery(left: float) -> str:
