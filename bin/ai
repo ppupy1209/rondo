@@ -17,5 +17,6 @@ cd "$root"
 if zellij list-sessions -sn 2>/dev/null | grep -qx "$name"; then
     exec zellij attach "$name"
 else
-    exec zellij -s "$name" -l ai
+    # -l 은 "기존 세션에 탭 추가" 동작이라 세션이 없으면 실패한다. 새로 만들 때는 -n.
+    exec zellij -s "$name" -n ai
 fi
