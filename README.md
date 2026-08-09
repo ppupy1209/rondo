@@ -4,13 +4,21 @@
 
 [한국어](README.ko.md)
 
-Rondo keeps Claude Code, Codex, Gemini, Kimi, and Grok in one persistent terminal workspace. It removes window juggling, shows each agent's local usage state, and carries unfinished work from Claude to Codex when Claude reaches its usage limit.
+Rondo keeps Claude Code, Codex, Gemini, Kimi, and Grok in one persistent terminal workspace. It removes window juggling, shows local usage state, makes agent-to-agent delegation visible, and carries unfinished work from Claude to Codex when Claude reaches its usage limit.
+
+It provides:
+
+- one persistent workspace per Git project;
+- interactive Korean / English setup and agent selection;
+- a shared status bar for models, usage, and relay state;
+- visible prompts between agent panes through `rondo send`;
+- opt-in Claude → Codex continuity at the usage limit.
 
 Rondo is local-first. It reads the files that each installed CLI already stores on your machine and does not add a hosted service, account, or API key.
 
 ## Install
 
-Requirements: macOS or Linux, Python 3.9+, Git, and [zellij](https://zellij.dev/).
+Requirements: macOS or Linux, Python 3.10+, Git, and [zellij](https://zellij.dev/) 0.44+.
 
 ```sh
 git clone https://github.com/ppupy1209/rondo.git ~/rondo
@@ -37,8 +45,6 @@ rondo doctor      # diagnose dependencies and configuration
 
 `rondo setup` is a real selector: move with arrow keys, toggle agents with Space, and save with Enter. Agent names never need to be typed.
 
-Any agent can run `rondo send` through its shell tool. Manual prompts, agent delegation, and automatic relay therefore use the same visible terminal-input path.
-
 ```text
 ┌────────────────────────────────────────────────────┐
 │ claude 42%   codex 88%   gemini 61%   relay ready │
@@ -52,13 +58,26 @@ Any agent can run `rondo send` through its shell tool. Manual prompts, agent del
 
 The first selected agent gets the left half. Additional agents stack on the right. Detaching or closing the terminal does not stop the zellij session.
 
+## Visible agent delegation
+
+`rondo send` finds an open agent pane, pastes the message into its interactive CLI, and submits it with Enter. The request appears in the target pane exactly where a manually entered prompt would appear; Rondo does not start a hidden copy of the agent.
+
+```sh
+rondo send codex "Review the current diff and finish the tests"
+rondo send claude "Check the proposed API design"
+rondo send gemini "Research another implementation approach"
+```
+
+Run the command inside a Rondo session, with the target pane open. An agent can invoke the same command through its shell tool, so manual prompts, agent delegation, and automatic relay all use one visible input path.
+
 ## How it works
 
 1. `rondo` resolves the current Git root and maps it to one zellij session.
 2. It builds a layout from `~/.config/rondo/panels` and launches each native CLI in the same working tree.
 3. `rondo-status` reads local CLI state every five seconds and renders only the panes that are open.
-4. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
-5. Agents can send visible prompts to one another with `rondo send`; automatic Claude → Codex relay uses the same path.
+4. `rondo send` targets a pane by its Rondo name and submits a visible prompt through zellij.
+5. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
+6. At Claude's usage threshold, the continuity relay prepares a local packet and can send it to the existing Codex pane.
 
 The agents do not share a vendor chat session. They share the real project directory, Git state, a persistent terminal workspace, and a small provider-neutral continuity packet.
 
@@ -69,9 +88,9 @@ Claude Code exposes its current model, rate limits, session ID, and transcript p
 ```sh
 rondo relay             # show mode and pending packet
 rondo relay ready       # prepare a packet; wait for explicit continuation (default)
-rondo relay auto        # let Codex continue immediately
+rondo relay auto        # send the handoff to the existing Codex pane immediately
 rondo relay off         # usage display only
-rondo continue          # open pending work in interactive Codex
+rondo continue          # send a pending handoff to the existing Codex pane
 ```
 
 A continuity packet contains:
@@ -82,7 +101,7 @@ A continuity packet contains:
 
 Packets live under `~/.cache/rondo/relay/`, use file mode `0600`, redact common token formats, and are deduplicated per Claude session and reset window. They are never committed. In `ready` mode, nothing is sent to Codex until you run `rondo continue`.
 
-`auto` is deliberately opt-in. Rondo types a visible handoff prompt into the existing Codex pane and submits it exactly like terminal input. The prompt points to the private packet and keeps the safety contract visible to Codex.
+`auto` is deliberately opt-in and requires Codex to be selected as a pane. Rondo types a visible handoff prompt into that pane and submits it exactly like terminal input. The prompt points to the private packet, which carries the current intent, Git state, and safety contract.
 
 ## Supported agents
 
@@ -106,7 +125,7 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo send <agent> <message>` | Type and submit a visible prompt in that agent's pane |
 | `rondo language` | Switch Korean / English |
 | `rondo relay [off\|ready\|auto]` | Inspect or change the continuity strategy |
-| `rondo continue` | Claim the pending packet in interactive Codex |
+| `rondo continue` | Send the pending handoff to the existing Codex pane |
 | `rondo doctor` | Check zellij, agents, and configuration |
 | `rondo -l` | List persistent sessions |
 | `handoff --init` | Enable the optional Git handoff log in a repository |
@@ -131,8 +150,10 @@ The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/
 ~/.cache/rondo/
   layout.kdl     generated zellij layout
   claude.*       local display cache
-  relay/         private continuity packets and Codex logs
+  relay/         private continuity packets and delivery logs
 ```
+
+For non-interactive setup, set `RONDO_LANG=ko|en`, `RONDO_PANELS=claude,codex,...`, and `RONDO_RELAY=off|ready|auto` before running `rondo setup`.
 
 No telemetry is included. Rondo does not store credentials. A relay excerpt can contain conversation text, so use `ready` mode when work must not cross providers without an explicit action.
 
