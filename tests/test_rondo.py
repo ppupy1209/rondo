@@ -709,6 +709,70 @@ class RondoTests(unittest.TestCase):
             ],
         )
 
+    def test_agent_can_only_propose_scheduled_work_and_human_runs_it_visibly(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        journal = rondo["_journal_library"]()
+        repo = self.base / "repo"
+        repo.mkdir()
+        scope = rondo["schedule_command"].__globals__
+        with (
+            patch.dict(scope, {
+                "repo_root": lambda: repo,
+                "require_git_repo": lambda _root: None,
+            }),
+            patch.dict(scope["os"].environ, {"RONDO_AGENT": "codex"}, clear=False),
+        ):
+            self.assertEqual(rondo["schedule_command"]([
+                "add", "Inspect", "CI", "failures", "--agent", "claude",
+                "--at", "2099-08-10T09:00:00+09:00",
+            ]), 0)
+            job = journal.jobs(repo)[0]
+            self.assertEqual(job["state"], "pending")
+            self.assertNotIn("Inspect CI failures", self.output.getvalue())
+            with self.assertRaisesRegex(RuntimeError, "interactive terminal"):
+                rondo["schedule_command"](["list"])
+
+        sender = unittest.mock.Mock()
+        with (
+            patch.dict(scope, {
+                "repo_root": lambda: repo,
+                "require_git_repo": lambda _root: None,
+                "_knowledge_require_user_terminal": lambda: None,
+                "_knowledge_confirm": lambda _prompt, checked=False: True,
+                "in_zellij": lambda: True,
+                "send_agent_message": sender,
+            }),
+            patch.dict(scope["os"].environ, {"RONDO_AGENT": ""}, clear=False),
+        ):
+            self.assertEqual(rondo["schedule_command"](["approve", job["id"]]), 0)
+            journal.job_action(repo, job["id"], "run", actor="human")
+            self.assertEqual(rondo["schedule_tick"](), 0)
+
+        message = " ".join(sender.call_args.args[1])
+        self.assertEqual(sender.call_args.args[0], "claude")
+        self.assertIn("Inspect CI failures", message)
+        self.assertEqual(journal.get_job(repo, job["id"])["state"], "completed")
+
+    def test_schedule_menu_selects_jobs_without_typing_an_id(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        journal = rondo["_journal_library"]()
+        repo = self.base / "repo"
+        repo.mkdir()
+        job = journal.propose_job(
+            repo, "Review the release", "codex", "every", "1h", "human"
+        )
+        scope = rondo["schedule_menu_command"].__globals__
+        dispatch = unittest.mock.Mock(return_value=0)
+        with patch.dict(scope, {
+            "repo_root": lambda: repo,
+            "require_git_repo": lambda _root: None,
+            "_knowledge_require_user_terminal": lambda: None,
+            "choose_one": unittest.mock.Mock(side_effect=[job["id"], "approve"]),
+            "schedule_command": dispatch,
+        }):
+            self.assertEqual(rondo["schedule_menu_command"](), 0)
+        dispatch.assert_called_once_with(["approve", job["id"]])
+
     def test_agent_started_tests_choose_saved_other_agents_without_a_menu(self):
         rondo = load_script("rondo", self.config, self.cache)
         scope = rondo["_testers"].__globals__
@@ -980,6 +1044,25 @@ class RondoTests(unittest.TestCase):
         self.assertTrue(all(name in text for name in ("cl", "cx", "gm")))
         self.assertGreaterEqual(text.count("%"), 3)
 
+    def test_status_bar_ticks_approved_schedules_without_overlapping(self):
+        status = load_script("ai-status", self.config, self.cache)
+        scope = status["tick_schedules"].__globals__
+        process = unittest.mock.Mock()
+        process.poll.return_value = None
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.dict(scope, {"SCHEDULE_PROCESS": None, "LAST_SCHEDULE_TICK": 0.0}),
+            patch.object(scope["time"], "monotonic", side_effect=[100.0]),
+            patch.object(scope["shutil"], "which", return_value="/bin/rondo"),
+            patch.object(scope["subprocess"], "Popen", return_value=process) as popen,
+        ):
+            status["tick_schedules"](self.base)
+            status["tick_schedules"](self.base)
+        popen.assert_called_once()
+        self.assertEqual(
+            popen.call_args.args[0], ["/bin/rondo", "schedule", "tick", "--quiet"]
+        )
+
 
 class AgentSessionTests(unittest.TestCase):
     def setUp(self):
@@ -1044,6 +1127,29 @@ class AgentSessionTests(unittest.TestCase):
             self.assertEqual(scope["os"].environ["RONDO_AGENT"], "codex")
             self.assertEqual(len(scope["os"].environ["RONDO_AGENT_SESSION"]), 32)
 
+    def test_agent_session_journal_records_only_start_and_end_metadata(self):
+        scope = self.runner["run"].__globals__
+        done = subprocess.CompletedProcess([], 0)
+        recorder = unittest.mock.Mock()
+        with (
+            patch.dict(scope["os"].environ, {}, clear=True),
+            patch.object(
+                scope["shutil"], "which",
+                side_effect=lambda name: f"/bin/{name}" if name == "codex" else None,
+            ),
+            patch.object(scope["subprocess"], "run", return_value=done),
+            patch.dict(scope, {"session_event": recorder}),
+        ):
+            self.assertEqual(self.runner["run"]("codex", ["PRIVATE_RAW_ARGUMENT"]), 0)
+
+        self.assertEqual([call.args[1] for call in recorder.call_args_list], [
+            "session-start", "session-end",
+        ])
+        self.assertNotIn(
+            "PRIVATE_RAW_ARGUMENT",
+            " ".join(str(call) for call in recorder.call_args_list),
+        )
+
     def test_audience_guidance_uses_each_cli_native_entry_point(self):
         commands = self.runner["session_commands"]
         claude = commands("claude", "nondev")
@@ -1072,6 +1178,9 @@ class AgentSessionTests(unittest.TestCase):
                 path = Path(fresh[fresh.index("--agent-file") + 1])
                 text = path.read_text()
             self.assertIn("rondo learn memory", text)
+            self.assertIn("rondo note", text)
+            self.assertIn("rondo schedule add", text)
+            self.assertIn("rondo race", text)
             self.assertIn("rondo test", text)
             self.assertIn("rondo code-review all", text)
 

@@ -28,10 +28,13 @@ from rondo.paths import CACHE, read_json, repo_key, setting  # noqa: E402
 BAR_CELLS = 8
 STALE_LIMITS = 120  # 이 초를 넘으면 한도 옆에 나이를 붙인다
 INTERVAL = 5
+SCHEDULE_INTERVAL = 30
 
 # 읽기에 실패한 틱에서 값이 사라지지 않도록 마지막 성공값을 들고 있는다.
 # DB 가 쓰기 중이면 열기가 실패해 바가 깜빡이던 문제를 막는다.
 LAST = {}
+SCHEDULE_PROCESS = None
+LAST_SCHEDULE_TICK = 0.0
 
 
 def repo_root():
@@ -127,6 +130,34 @@ def open_panes():
     return set(re.findall(r'name="([a-z-]+)"', out.stdout))
 
 
+def tick_schedules(root):
+    """Let approved jobs advance while this visible Rondo session is alive."""
+    global LAST_SCHEDULE_TICK, SCHEDULE_PROCESS
+    if not os.environ.get("ZELLIJ_SESSION_NAME"):
+        return
+    if SCHEDULE_PROCESS is not None and SCHEDULE_PROCESS.poll() is None:
+        return
+    now = time.monotonic()
+    if now - LAST_SCHEDULE_TICK < SCHEDULE_INTERVAL:
+        return
+    binary = shutil.which("rondo")
+    if not binary:
+        return
+    command = [binary, "schedule", "tick", "--quiet"]
+    if os.name == "nt" and pathlib.Path(binary).suffix.lower() in (".cmd", ".bat"):
+        command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *command]
+    environment = os.environ.copy()
+    environment.pop("RONDO_AGENT", None)
+    try:
+        SCHEDULE_PROCESS = subprocess.Popen(
+            command, cwd=root, env=environment,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        LAST_SCHEDULE_TICK = now
+    except OSError:
+        pass
+
+
 def line(root, width=None):
     panes = open_panes()
     snapshots = []
@@ -177,6 +208,8 @@ def main():
         mute_input(fd)
 
     while True:
+        if not once:
+            tick_schedules(root)
         width = shutil.get_terminal_size(fallback=(80, 24)).columns
         text = line(root, width)
         # 커서를 좌상단으로 보내고 줄을 지운 뒤 다시 그린다

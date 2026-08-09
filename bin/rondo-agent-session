@@ -13,12 +13,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from rondo import approval, audience, knowledge
+from rondo import approval, audience, journal, knowledge
 from rondo.paths import repo_key
 
 AGENTS = {"claude", "codex", "gemini", "kimi", "grok"}
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
+journal.CACHE = CACHE_DIR
 
 
 def executable(command: tuple[str, ...] | list[str]) -> list[str]:
@@ -43,24 +44,38 @@ def handoff_prompt(agent: str) -> str | None:
 def action_guidance(language: str) -> str:
     if language == "ko":
         return (
-            "[Rondo 자연어 작업] 사용자가 Rondo 명령을 외우게 하지 마세요. 명시적으로 기억을 요청하면 "
-            "사실은 `rondo learn memory ...`, 반복 절차는 `rondo learn skill ...`로 직접 제안하세요. "
-            "독립 테스트를 요청하면 구현 세션에서 스스로 검증하지 말고 `rondo test` 또는 요청 범위의 "
-            "test 프로필을 실행하세요. 테스트 진행 확인과 결과 수집은 각각 `rondo test status`, "
-            "`rondo test finish`를 사용하세요. 검증 증거는 `rondo proof`, 독립 코드 리뷰는 "
-            "`rondo code-review all`, 과거 맥락 검색은 `rondo recall ...`을 사용하세요. 실행한 동작을 "
-            "짧게 알려주되 승인·거절·삭제, PR·push·merge, undo는 사용자의 명시적 요청 없이 실행하지 마세요."
+            "[Rondo 자연어 작업] 사용자가 Rondo 명령을 외우게 하지 마세요. 복잡한 작업 성공, 사용자 교정, "
+            "오류 복구, 저장소 고유 규칙 발견 뒤에는 재사용 가치가 있는 최소 사실을 `rondo learn memory ...`, "
+            "반복 절차를 `rondo learn skill ...`로 먼저 제안하세요. 제안은 절대 스스로 승인하지 마세요. "
+            "의미 있는 작업이 끝나면 비밀값·원문 대화 없이 결과와 이유만 `rondo note ... --ref ...`로 짧게 "
+            "기록하세요. 과거 맥락은 `rondo recall ...`로 찾으세요. 사용자가 반복·예약 작업을 자연어로 "
+            "요청하면 정확한 agent와 `--every`, `--at` 또는 `--cron`을 골라 `rondo schedule add ...`로 "
+            "제안하고 승인 대기임을 알리세요. 서로 다른 해법의 병렬 탐색에는 `rondo race`, 독립 검증에는 "
+            "`rondo test`, 증거에는 `rondo proof`, 독립 리뷰에는 `rondo code-review all`을 사용하세요. "
+            "테스트 진행 확인과 결과 수집은 `rondo test status`, `rondo test finish`를 사용하세요. 실행한 "
+            "동작은 짧게 알리되 승인·거절·삭제·일시정지, PR·push·merge, undo는 사용자의 명시적 요청 없이 "
+            "실행하지 마세요."
         )
     return (
-        "[Rondo natural actions] Do not make the user memorize Rondo syntax. When explicitly asked to "
-        "remember something, directly propose a fact with `rondo learn memory ...` or a repeatable procedure "
-        "with `rondo learn skill ...`. For independent testing, never verify in the implementation session; "
-        "run `rondo test` or the requested test profile; use `rondo test status` and `rondo test finish` to "
-        "check progress and collect results. Use `rondo proof` for evidence, "
-        "`rondo code-review all` for independent code review, and `rondo recall ...` for past context. Briefly "
-        "report the action, but never approve, reject, remove, create or merge a PR, push, or undo without an "
-        "explicit user request."
+        "[Rondo natural actions] Do not make the user memorize Rondo syntax. After a complex success, user "
+        "correction, error recovery, or repository-specific discovery, proactively propose the smallest reusable "
+        "fact with `rondo learn memory ...` or procedure with `rondo learn skill ...`; never approve your own "
+        "proposal. After meaningful work, record only the high-signal outcome and rationale, never secrets or raw "
+        "conversation, with `rondo note ... --ref ...`; use `rondo recall ...` for prior context. When the user "
+        "naturally asks for recurring or scheduled work, choose the exact agent and one of `--every`, `--at`, or "
+        "`--cron`, call `rondo schedule add ...`, and report that it awaits approval. Use `rondo race` to explore "
+        "competing implementations in parallel, `rondo test` for independent testing, `rondo proof` for evidence, "
+        "and `rondo code-review all` for independent review; use `rondo test status` and `rondo test finish` to "
+        "collect results. Briefly report actions, but never approve, reject, remove, pause, create or merge a PR, "
+        "push, or undo without an explicit user request."
     )
+
+
+def session_event(root: Path, kind: str, agent: str, session: str, summary: str) -> None:
+    try:
+        journal.record(root, kind, summary, agent=agent, session=session)
+    except (journal.JournalError, OSError):
+        pass
 
 
 def kimi_agent_file(mode: str, rule: str, root: Path) -> Path:
@@ -150,24 +165,35 @@ def session_commands(
 def run(agent: str, extra: list[str]) -> int:
     os.environ["RONDO_AGENT"] = agent
     os.environ.setdefault("RONDO_AGENT_SESSION", uuid.uuid4().hex)
+    session = os.environ["RONDO_AGENT_SESSION"]
+    root = Path.cwd()
+    session_event(root, "session-start", agent, session, f"{agent} session started")
     mode = audience.selected(CONFIG_DIR)
     resume, fresh, compatibility = session_commands(agent, mode)
     prompt = handoff_prompt(agent)
     tail = [*extra, *([prompt] if prompt else [])]
-    result = subprocess.run([*executable(resume or fresh), *tail])
-    if resume and result.returncode == 1:
-        result = subprocess.run([*executable(fresh), *tail])
-    if compatibility and result.returncode == 1:
-        result = subprocess.run([*executable(compatibility), *tail])
+    result = None
+    try:
+        result = subprocess.run([*executable(resume or fresh), *tail])
+        if resume and result.returncode == 1:
+            result = subprocess.run([*executable(fresh), *tail])
+        if compatibility and result.returncode == 1:
+            result = subprocess.run([*executable(compatibility), *tail])
 
-    hook = shutil.which("handoff")
-    if hook and os.name != "nt":
-        label = {
-            "claude": "Claude", "codex": "Codex", "gemini": "Gemini",
-            "kimi": "Kimi", "grok": "Grok",
-        }[agent]
-        subprocess.run([hook, label], check=False)
-    return result.returncode
+        hook = shutil.which("handoff")
+        if hook and os.name != "nt":
+            label = {
+                "claude": "Claude", "codex": "Codex", "gemini": "Gemini",
+                "kimi": "Kimi", "grok": "Grok",
+            }[agent]
+            subprocess.run([hook, label], check=False)
+        return result.returncode
+    finally:
+        code = result.returncode if result is not None else -1
+        session_event(
+            root, "session-end", agent, session,
+            f"{agent} session ended with exit code {code}",
+        )
 
 
 def main() -> int:

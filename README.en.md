@@ -14,7 +14,9 @@ It provides:
 - one explanation level shared by every agent pane;
 - a shared status bar for models, usage, and relay state;
 - visible prompts between agent panes through `rondo send`;
-- human-approved project memory, reusable procedures, and work-history search;
+- human-approved project memory, reusable procedures, and proactive learning proposals;
+- repository-scoped SQLite FTS work journals and session search;
+- human-approved scheduled work delivered only to visible panes;
 - element-scoped frontend requests through Rondo Lens;
 - executable evidence and a risk-based human review queue through Rondo Proof;
 - red-team, blue-team, reliability, and security tests physically separated from implementation sessions;
@@ -68,6 +70,8 @@ rondo add         # select and add another agent pane
 rondo send codex "Review the current diff"  # type and submit in the Codex pane
 rondo learn pending  # review project knowledge proposed by users and agents
 rondo recall "authentication"  # search approved knowledge, work history, and Git
+rondo history "authentication"  # search the high-signal repository work journal
+rondo schedule       # manage proposed and active jobs with a selection menu
 rondo lens        # click a UI element and send its focused context
 rondo proof       # run checks and build a risk-based review packet
 rondo test all --from codex --tester claude  # test outside the implementation session
@@ -81,13 +85,14 @@ For everyday use, you do not need to memorize subcommands. Ask naturally in an a
 
 ```text
 Remember this rule for the project
+Have Codex inspect CI every day at 9 AM
 Independently test the current changes
 Run only the security tests in a fresh session
 Have every configured agent review the code
 Find our earlier authentication work
 ```
 
-Human decisions such as approving a memory proposal are never automated. Run bare `rondo` from the `shell` tab, select the proposal with the arrow keys, inspect the original text, then approve or reject it. Existing commands such as `rondo learn` and `rondo test` remain available for scripts and precise control.
+Human decisions such as approving memory or scheduled-work proposals are never automated. Run bare `rondo` from the `shell` tab, select the item with the arrow keys, inspect the original text, then approve or reject it. Existing commands such as `rondo learn`, `rondo schedule`, and `rondo test` remain available for scripts and precise control.
 
 ```text
 ┌────────────────────────────────────────────────────┐
@@ -170,7 +175,43 @@ Approved `memory` entries are shared with new agent sessions under a strict size
 
 Approval, rejection, and removal require an interactive user terminal. Inside Rondo, the process must also be running in the `shell` tab. Agent panes, race tabs, pipes, and scripts are rejected. Each proposal is limited to 2,000 characters, approved memory to 4,000 characters total, and procedures to 16. Common secret, prompt-injection, and destructive-command patterns plus invisible control characters are rejected before storage. Concurrent agent writes are serialized by a repository lock, and corrupt or symbolic-link state files fail closed.
 
-History contains only short Rondo operation events and Git commit subjects; Rondo does not ingest raw Claude, Codex, or Gemini transcripts. Everything stays private under `~/.cache/rondo/knowledge/` without a network service. This is not a secret vault against a malicious process that already has the same operating-system user privileges, so never record tokens or passwords.
+History contains only short Rondo operation events and Git commit subjects; Rondo does not ingest raw Claude, Codex, or Gemini transcripts. Everything stays private under `~/.cache/rondo/knowledge/` and `~/.cache/rondo/journal/` without a network service. This is not a secret vault against a malicious process that already has the same operating-system user privileges, so never record tokens or passwords.
+
+## Learning loop, work journal, and scheduled work
+
+Every newly started agent receives guidance to choose Rondo actions from natural-language requests. After a complex success, user correction, error recovery, or repository-specific discovery, it proactively proposes the smallest reusable memory or procedure. After meaningful work it records only the outcome and rationale, not the raw conversation. Proposed knowledge never reaches another agent until a person approves it.
+
+The repository-scoped work journal stores up to 5,000 structured events in SQLite. WAL mode and FTS5 provide fast Korean and English search; a plain-search fallback is used when a Python SQLite build omits FTS5. Bounded storage and progressive disclosure avoid copying an entire old conversation into every new prompt.
+
+```sh
+rondo note "Login regression tests passed" --ref tests/auth_test.py
+rondo history "login"        # search outcomes, delegation, and verification
+rondo history --sessions     # provider-neutral Rondo session timeline
+
+rondo schedule add "Inspect CI failures" --agent codex --every 2h
+rondo schedule add "Run the release checks" --agent claude --at 2026-08-10T09:00:00+09:00
+rondo schedule add "Check dependencies on weekday mornings" --agent codex --cron "0 9 * * 1-5"
+rondo schedule              # approve, pause, resume, run, or remove without typing IDs
+```
+
+An agent calling `schedule add` can only create a proposal. Only the user in Rondo's `shell` tab can inspect raw pending text or approve, reject, pause, resume, run now, or remove it. Approved jobs never become hidden shell commands: while the Rondo session is alive, its status pane checks every 30 seconds and enters due work visibly into the target agent's prompt. A trust or approval screen blocks delivery; three failures pause the job. SQLite leases prevent concurrent status panes from delivering at the same time. If the process crashes immediately after sending but before recording completion, the next check can deliver the prompt once more.
+
+### Shared Hermes principles and Rondo differences
+
+Rondo 0.11 applies ideas found in Hermes Agent—durable memory, searchable sessions, scheduled work, isolated delegation, and progressively loaded procedures—to coding-agent orchestration. It is not affiliated with the official Hermes project and does not bundle the Hermes runtime.
+
+Design references: [Hermes feature overview](https://hermes-agent.nousresearch.com/docs/user-guide/features/overview/), [Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory/), [Sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions/), [Cron](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/cron.md), [Delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation/), and [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security/)
+
+| Principle | Rondo implementation | Security and product difference |
+|---|---|---|
+| Durable memory and self-improvement | Agents proactively propose memories and procedures | A non-configurable human gate separates storage from reuse |
+| Searchable sessions and history | Repository SQLite WAL + FTS5 journal and Rondo session timeline | Stores secret-redacted, high-signal outcomes instead of raw provider transcripts |
+| Cron and recurring work | Intervals, ISO timestamps, five-field cron, up to 100 jobs | No daemon or arbitrary shell execution; work is visibly delivered to an open pane |
+| Subagent delegation | `race`, independent `test`, `code-review`, and Claude→Codex relay | Implementation and verification sessions are physically separated; delegation stays visible |
+| Skills and tool choice | Approved procedures inject only an index and load details on demand | Procedures never become executable plugins automatically |
+| Provider choice | Claude, Codex, Gemini, Kimi, and Grok share one repository workspace | No central model account or direct upload to a model API |
+
+Rondo does not replicate Hermes model-inference speed, provider-side prompt caching, or API routing; each vendor CLI owns those layers. Rondo improves orchestration efficiency through indexed journal lookup, bounded memory, and progressive procedure loading. General messaging gateways, voice-assistant behavior, and always-on unattended execution are intentionally excluded because they would expand a coding tool's authority and attack surface.
 
 ## Rondo Lens
 
@@ -389,6 +430,9 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo learn memory\|skill ...` | Propose repository memory or a reusable procedure for approval |
 | `rondo learn pending\|show\|approve\|reject\|remove` | Manage the human-approved knowledge lifecycle |
 | `rondo recall [query\|--id ID]` | Search approved knowledge, operation events, and recent Git history |
+| `rondo note <summary> [--ref reference]` | Record a secret-redacted, high-signal work outcome |
+| `rondo history [query\|--sessions]` | Search the repository work journal and agent sessions |
+| `rondo schedule [command]` | Manage human-approved recurring and one-shot work |
 | `rondo proof [--reviewer agent]` | Run checks and build an independent review packet |
 | `rondo review [--budget 2m]` | Show the highest-risk human decisions within a time budget |
 | `rondo git [command]` | Manage Git connection and repository-local PR/reviewer policy |
@@ -437,6 +481,7 @@ The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/
   lens/          private element context packets and cropped screenshots
   proof/         private task intent, evidence packets, and review queues
   knowledge/     approved repository memory, procedures, and short operation events
+  journal/       repository SQLite journal, sessions, and approved scheduled work
   test/          isolated test state, reports, k6 results, and Grafana captures
   relay/         private continuity packets and delivery logs
 ```

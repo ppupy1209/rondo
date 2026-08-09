@@ -28,7 +28,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -92,6 +92,11 @@ TEXT = {
                         프로젝트 지식 검토·승인·삭제
   rondo recall [검색어|--id ID]
                         승인된 기억·절차·작업 이력 검색
+  rondo note "<요약>" [--ref 참조]
+                        검색 가능한 고신호 작업 요약 기록
+  rondo history [검색어|--sessions]
+                        저장소 작업 저널·에이전트 세션 검색
+  rondo schedule [명령] 승인형 예약 작업 생성·관리
   rondo proof [--reviewer codex] [--no-checks]
                         실행 증거·위험도·사람 판단 항목 생성
   rondo git [명령]      Git 연결·PR 정책·reviewer 설정
@@ -215,6 +220,8 @@ TEXT = {
         "home_code_review": "독립 코드 리뷰 시작",
         "home_knowledge": "프로젝트 지식 검토·삭제",
         "home_recall": "프로젝트 기억·작업 이력 찾기",
+        "home_history": "작업 저널·세션 보기",
+        "home_schedule": "예약 작업 관리",
         "home_git": "Git·PR 정책 확인",
         "home_setup": "Rondo 설정 변경",
         "home_exit": "메뉴 닫기",
@@ -255,10 +262,64 @@ TEXT = {
         "learn_approved": "프로젝트 지식을 승인했습니다: {id}. 열린 에이전트는 `rondo recall --id {id}`로 읽고, 새 세션에는 자동 적용됩니다.",
         "learn_rejected": "프로젝트 지식 제안을 폐기했습니다: {id}",
         "learn_removed": "승인된 프로젝트 지식을 삭제했습니다: {id}",
-        "learn_human_only": "승인·거절·삭제는 Rondo shell 탭 또는 별도의 대화형 터미널에서 사용자가 직접 해야 합니다.",
+        "learn_human_only": "보호된 승인과 수명주기 작업은 Rondo shell 탭 또는 별도의 대화형 터미널에서 사용자가 직접 해야 합니다.",
         "recall_usage": "사용법: rondo recall [검색어] | rondo recall --id <ID>",
         "recall_title": "Rondo Recall",
         "recall_empty": "일치하는 승인 지식이나 작업 이력이 없습니다.",
+        "note_usage": "사용법: rondo note \"<작업 요약>\" [--ref 참조]",
+        "note_saved": "작업 저널에 기록했습니다: {id}",
+        "history_usage": "사용법: rondo history [검색어|--id ID|--sessions]",
+        "history_title": "Rondo 작업 저널",
+        "history_sessions": "Rondo 에이전트 세션",
+        "history_empty": "기록된 작업 이력이 없습니다.",
+        "schedule_usage": "사용법: rondo schedule add \"<작업>\" --agent <이름> (--every 1h|--at ISO|--cron \"0 9 * * 1-5\") | list | approve|reject|pause|resume|run|remove <ID> | tick",
+        "schedule_title": "Rondo 예약 작업",
+        "schedule_empty": "예약 작업이 없습니다.",
+        "schedule_new": "새 예약 작업 만들기",
+        "schedule_prompt": "에이전트에게 보낼 작업을 입력하세요: ",
+        "schedule_type_title": "실행 주기를 선택하세요",
+        "schedule_every": "간격 반복 — 예: 30m, 2h, 1d",
+        "schedule_at": "한 번 실행 — ISO 시각",
+        "schedule_cron": "Cron 반복 — 5개 필드",
+        "schedule_value": "주기 값을 입력하세요: ",
+        "schedule_candidate": "{id} · {state} · {agent} · {schedule}\n{prompt}",
+        "schedule_proposed": "예약 작업 제안 {id} · {agent} · {schedule}. 사용자 승인 전에는 실행되지 않습니다.",
+        "schedule_decision_title": "이 예약 작업을 어떻게 처리할까요?",
+        "schedule_confirm_approve": "이 작업을 예약 실행하도록 승인할까요? [y/N] ",
+        "schedule_confirm_reject": "이 예약 제안을 폐기할까요? [y/N] ",
+        "schedule_confirm_pause": "이 예약 작업을 일시정지할까요? [y/N] ",
+        "schedule_confirm_resume": "이 예약 작업을 다시 시작할까요? [y/N] ",
+        "schedule_confirm_run": "이 작업을 지금 에이전트에게 보낼까요? [y/N] ",
+        "schedule_confirm_remove": "이 예약 작업을 삭제할까요? [y/N] ",
+        "schedule_approved": "예약 작업을 승인했습니다: {id}",
+        "schedule_rejected": "예약 제안을 폐기했습니다: {id}",
+        "schedule_paused": "예약 작업을 일시정지했습니다: {id}",
+        "schedule_resumed": "예약 작업을 다시 시작했습니다: {id}",
+        "schedule_run": "예약 작업을 즉시 실행 대기로 옮겼습니다: {id}",
+        "schedule_removed": "예약 작업을 삭제했습니다: {id}",
+        "schedule_delivered": "예약 작업 {id}을(를) {agent} 패널에 전달했습니다.",
+        "schedule_failed": "예약 작업 {id} 전달 실패: {reason}",
+        "schedule_state_pending": "승인 대기",
+        "schedule_state_active": "실행 중",
+        "schedule_state_paused": "일시정지",
+        "schedule_state_completed": "완료",
+        "schedule_action_approve": "승인",
+        "schedule_action_reject": "거절",
+        "schedule_action_pause": "일시정지",
+        "schedule_action_resume": "다시 시작",
+        "schedule_action_run": "지금 실행",
+        "schedule_action_remove": "삭제",
+        "journal_error": "작업 저널을 처리하지 못했습니다: {reason}",
+        "journal_errors": {
+            "empty": "내용이 비어 있습니다", "invalid_query": "검색어가 너무 길거나 안전하지 않습니다",
+            "invalid_schedule": "지원하지 않는 주기입니다", "invalid_agent": "지원하지 않는 에이전트입니다",
+            "jobs_full": "예약 작업 한도에 도달했습니다", "not_found": "ID를 찾지 못했거나 모호합니다",
+            "human_only": "이 작업은 사용자가 직접 승인해야 합니다", "invalid_action": "현재 상태에서 할 수 없는 작업입니다",
+            "state_unsafe": "저장 DB가 손상되었거나 심볼릭 링크로 바뀌었습니다",
+            "busy": "다른 Rondo 프로세스가 DB를 갱신 중입니다. 잠시 후 다시 시도하세요",
+            "too_long": "내용은 2,000자 이하여야 합니다", "unsafe_secret": "비밀값으로 보이는 내용이 포함되어 있습니다",
+            "unsafe_instruction": "프롬프트 주입 또는 위험한 명령 패턴이 포함되어 있습니다"
+        },
         "knowledge_error": "프로젝트 지식을 처리하지 못했습니다: {reason}",
         "knowledge_errors": {
             "invalid_kind": "memory 또는 skill만 지원합니다", "empty": "내용이 비어 있습니다",
@@ -358,6 +419,12 @@ TEXT = {
                         Review, approve, or remove project knowledge
   rondo recall [query|--id ID]
                         Search approved memory, procedures, and work history
+  rondo note "<summary>" [--ref reference]
+                        Record a high-signal searchable work summary
+  rondo history [query|--sessions]
+                        Search the repository work journal and agent sessions
+  rondo schedule [command]
+                        Create and manage human-approved scheduled work
   rondo proof [--reviewer codex] [--no-checks]
                         Build evidence, risk, and human decisions
   rondo git [command]   Connect Git and configure PR/reviewer policy
@@ -481,6 +548,8 @@ Inside a session
         "home_code_review": "Start independent code review",
         "home_knowledge": "Review or remove project knowledge",
         "home_recall": "Find project memory or work history",
+        "home_history": "Browse work journal and sessions",
+        "home_schedule": "Manage scheduled work",
         "home_git": "Inspect Git and PR policy",
         "home_setup": "Change Rondo settings",
         "home_exit": "Close menu",
@@ -521,10 +590,64 @@ Inside a session
         "learn_approved": "Approved project knowledge: {id}. Open agents can read it with `rondo recall --id {id}`; new sessions receive it automatically.",
         "learn_rejected": "Discarded project knowledge proposal: {id}",
         "learn_removed": "Removed approved project knowledge: {id}",
-        "learn_human_only": "Approval, rejection, and removal must be performed by the user in the Rondo shell tab or another interactive terminal.",
+        "learn_human_only": "Protected approvals and lifecycle actions must be performed by the user in the Rondo shell tab or another interactive terminal.",
         "recall_usage": "Usage: rondo recall [query] | rondo recall --id <ID>",
         "recall_title": "Rondo Recall",
         "recall_empty": "No approved knowledge or work history matched.",
+        "note_usage": "Usage: rondo note \"<work summary>\" [--ref reference]",
+        "note_saved": "Recorded work journal entry: {id}",
+        "history_usage": "Usage: rondo history [query|--id ID|--sessions]",
+        "history_title": "Rondo work journal",
+        "history_sessions": "Rondo agent sessions",
+        "history_empty": "No work history has been recorded.",
+        "schedule_usage": "Usage: rondo schedule add \"<task>\" --agent <name> (--every 1h|--at ISO|--cron \"0 9 * * 1-5\") | list | approve|reject|pause|resume|run|remove <ID> | tick",
+        "schedule_title": "Rondo scheduled work",
+        "schedule_empty": "No scheduled work exists.",
+        "schedule_new": "Create scheduled work",
+        "schedule_prompt": "Task to send to the agent: ",
+        "schedule_type_title": "Choose a schedule",
+        "schedule_every": "Repeat by interval — e.g. 30m, 2h, 1d",
+        "schedule_at": "Run once — ISO timestamp",
+        "schedule_cron": "Repeat with cron — five fields",
+        "schedule_value": "Schedule value: ",
+        "schedule_candidate": "{id} · {state} · {agent} · {schedule}\n{prompt}",
+        "schedule_proposed": "Scheduled-work proposal {id} · {agent} · {schedule}. It cannot run before user approval.",
+        "schedule_decision_title": "What should happen to this scheduled task?",
+        "schedule_confirm_approve": "Approve this task for scheduled delivery? [y/N] ",
+        "schedule_confirm_reject": "Discard this schedule proposal? [y/N] ",
+        "schedule_confirm_pause": "Pause this scheduled task? [y/N] ",
+        "schedule_confirm_resume": "Resume this scheduled task? [y/N] ",
+        "schedule_confirm_run": "Send this task to the agent now? [y/N] ",
+        "schedule_confirm_remove": "Remove this scheduled task? [y/N] ",
+        "schedule_approved": "Approved scheduled task: {id}",
+        "schedule_rejected": "Discarded schedule proposal: {id}",
+        "schedule_paused": "Paused scheduled task: {id}",
+        "schedule_resumed": "Resumed scheduled task: {id}",
+        "schedule_run": "Queued scheduled task to run now: {id}",
+        "schedule_removed": "Removed scheduled task: {id}",
+        "schedule_delivered": "Delivered scheduled task {id} to the {agent} pane.",
+        "schedule_failed": "Scheduled task {id} delivery failed: {reason}",
+        "schedule_state_pending": "pending",
+        "schedule_state_active": "active",
+        "schedule_state_paused": "paused",
+        "schedule_state_completed": "completed",
+        "schedule_action_approve": "Approve",
+        "schedule_action_reject": "Reject",
+        "schedule_action_pause": "Pause",
+        "schedule_action_resume": "Resume",
+        "schedule_action_run": "Run now",
+        "schedule_action_remove": "Remove",
+        "journal_error": "Could not process the work journal: {reason}",
+        "journal_errors": {
+            "empty": "content is empty", "invalid_query": "the query is too long or unsafe",
+            "invalid_schedule": "the schedule is not supported", "invalid_agent": "the agent is not supported",
+            "jobs_full": "the scheduled-work limit was reached", "not_found": "the ID is missing or ambiguous",
+            "human_only": "this action requires direct user approval", "invalid_action": "that action is invalid in the current state",
+            "state_unsafe": "the database is corrupt or was replaced by a symbolic link",
+            "busy": "another Rondo process is updating the database; try again shortly",
+            "too_long": "content must be at most 2,000 characters", "unsafe_secret": "the content appears to contain a secret",
+            "unsafe_instruction": "the content contains a prompt-injection or dangerous-command pattern"
+        },
         "knowledge_error": "Could not process project knowledge: {reason}",
         "knowledge_errors": {
             "invalid_kind": "only memory or skill is supported", "empty": "content is empty",
@@ -1052,7 +1175,7 @@ def clean_cache() -> int:
             path.unlink(missing_ok=True)
             removed += 1
 
-    for section in ("proof", "race", "relay", "test", "knowledge"):
+    for section in ("proof", "race", "relay", "test", "knowledge", "journal"):
         directory = CACHE_DIR / section
         if directory.is_symlink() or not directory.is_dir():
             continue
@@ -1273,6 +1396,10 @@ def send_agent_message(
     if session_name:
         command += ["-s", session_name]
     _send_to_pane(name, pane, message, command)
+    record_journal(
+        Path.cwd(), "prompt", message, f"agent:{name}", agent=name,
+        session=session_name or os.environ.get("ZELLIJ_SESSION_NAME", ""),
+    )
     print(t("sent", name=name))
 
 
@@ -1513,6 +1640,12 @@ def _knowledge_failure(error) -> RuntimeError:
     return RuntimeError(t("knowledge_error", reason=reason))
 
 
+def _journal_failure(error) -> RuntimeError:
+    reasons = TEXT[LANGUAGE]["journal_errors"]
+    reason = reasons.get(getattr(error, "code", ""), str(error))
+    return RuntimeError(t("journal_error", reason=reason))
+
+
 def _invalidate_knowledge_guidance_key(key: str) -> None:
     directory = CACHE_DIR / "audience"
     if not re.fullmatch(r"[0-9a-f]{16}", key) or directory.is_symlink():
@@ -1528,6 +1661,29 @@ def _invalidate_knowledge_guidance(root: Path) -> None:
     _invalidate_knowledge_guidance_key(repo_key(root))
 
 
+def _journal_library():
+    from rondo import journal as journal_lib
+
+    journal_lib.CACHE = CACHE_DIR
+    return journal_lib
+
+
+def record_journal(
+    root: Path, kind: str, summary: str, reference: str = "",
+    agent: str = "", session: str = "",
+) -> dict | None:
+    journal_lib = _journal_library()
+    try:
+        return journal_lib.record(
+            root, kind, summary, reference,
+            agent=agent or os.environ.get("RONDO_AGENT", ""),
+            session=session or os.environ.get("RONDO_AGENT_SESSION", "")
+            or os.environ.get("ZELLIJ_SESSION_NAME", ""),
+        )
+    except (journal_lib.JournalError, OSError):
+        return None
+
+
 def record_event(root: Path, kind: str, summary: str, reference: str = "") -> None:
     from rondo import knowledge as knowledge_lib
 
@@ -1535,6 +1691,7 @@ def record_event(root: Path, kind: str, summary: str, reference: str = "") -> No
         knowledge_lib.record(root, kind, summary, reference)
     except (knowledge_lib.KnowledgeError, OSError):
         pass
+    record_journal(root, kind, summary, reference)
 
 
 def _knowledge_require_user_terminal() -> None:
@@ -1708,6 +1865,7 @@ def knowledge_review_command() -> int:
 def recall_command(args: list[str]) -> int:
     from rondo import knowledge as knowledge_lib
 
+    journal_lib = _journal_library()
     root = repo_root()
     require_git_repo(root)
     if args and args[0].startswith("--") and (args[0] != "--id" or len(args) != 2):
@@ -1719,9 +1877,29 @@ def recall_command(args: list[str]) -> int:
         query = "" if exact else " ".join(args).strip()
         if len(query) > 200 or any(char in query for char in "\r\n\0"):
             raise RuntimeError(t("recall_usage"))
-        items = knowledge_lib.recall(root, query=query, exact_id=exact)
+        if exact:
+            try:
+                items = knowledge_lib.recall(root, exact_id=exact)
+            except knowledge_lib.KnowledgeError as error:
+                if error.code != "not_found":
+                    raise
+                items = [journal_lib.get_event(root, exact)]
+        else:
+            items = [
+                *knowledge_lib.recall(root, query=query),
+                *journal_lib.search(root, query=query, limit=20),
+            ]
+            unique = {}
+            for item in items:
+                key = (item["kind"], item["content"], item.get("reference", ""))
+                unique.setdefault(key, item)
+            items = sorted(
+                unique.values(), key=lambda item: item.get("at", 0), reverse=True
+            )[:10]
     except knowledge_lib.KnowledgeError as error:
         raise _knowledge_failure(error) from None
+    except journal_lib.JournalError as error:
+        raise _journal_failure(error) from None
     print(t("recall_title"))
     if not items:
         print("  " + t("recall_empty"))
@@ -1733,6 +1911,297 @@ def recall_command(args: list[str]) -> int:
         content = item["content"] if exact else " ".join(item["content"].split())[:240]
         print(f"  {item['id']} · {item['kind']}{label} · {when}{reference}\n    {content}")
     return 0
+
+
+def note_command(args: list[str]) -> int:
+    journal_lib = _journal_library()
+    root = repo_root()
+    require_git_repo(root)
+    try:
+        bare, values, _ = _command_options(args, {"--ref"})
+        summary = " ".join(bare).strip()
+        if not summary:
+            raise ValueError("empty")
+        reference = values["--ref"][-1] if values["--ref"] else ""
+        item = journal_lib.record(
+            root, "note", summary, reference,
+            agent=os.environ.get("RONDO_AGENT", "human"),
+            session=os.environ.get("RONDO_AGENT_SESSION", "")
+            or os.environ.get("ZELLIJ_SESSION_NAME", ""),
+        )
+    except (ValueError, journal_lib.JournalError) as error:
+        if isinstance(error, journal_lib.JournalError):
+            raise _journal_failure(error) from None
+        raise RuntimeError(t("note_usage")) from None
+    print(t("note_saved", id=item["id"]))
+    return 0
+
+
+def history_command(args: list[str]) -> int:
+    journal_lib = _journal_library()
+    root = repo_root()
+    require_git_repo(root)
+    try:
+        if args == ["--sessions"]:
+            rows = journal_lib.sessions(root)
+            print(t("history_sessions"))
+            if not rows:
+                print("  " + t("history_empty"))
+                return 0
+            for row in rows:
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["updated_at"]))
+                print(
+                    f"  {row['session']} · {row['agent'] or '-'} · "
+                    f"{row['events']} events · {when}"
+                )
+            return 0
+        if args and args[0] == "--id":
+            if len(args) != 2:
+                raise RuntimeError(t("history_usage"))
+            items = [journal_lib.get_event(root, args[1])]
+            full = True
+        elif any(arg.startswith("--") for arg in args):
+            raise RuntimeError(t("history_usage"))
+        else:
+            items = journal_lib.search(root, " ".join(args).strip())
+            full = False
+    except journal_lib.JournalError as error:
+        raise _journal_failure(error) from None
+    print(t("history_title"))
+    if not items:
+        print("  " + t("history_empty"))
+        return 0
+    for item in items:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(item["at"]))
+        agent = f" · {item['name']}" if item.get("name") else ""
+        session = f" · {item['session']}" if item.get("session") else ""
+        reference = f" · {item['reference']}" if item.get("reference") else ""
+        content = item["content"] if full else " ".join(item["content"].split())[:240]
+        print(
+            f"  {item['id']} · {item['kind']}{agent} · {when}{session}{reference}\n"
+            f"    {content}"
+        )
+    return 0
+
+
+def _schedule_text(item: dict) -> str:
+    return f"{item['schedule_kind']}:{item['schedule_value']}"
+
+
+def _print_schedule_job(item: dict, full: bool = False) -> None:
+    prompt = item["prompt"] if full else " ".join(item["prompt"].split())[:160]
+    state = item.get("state", "pending")
+    state_key = f"schedule_state_{state}"
+    state_label = TEXT[LANGUAGE].get(state_key, state)
+    print(t(
+        "schedule_candidate", id=item["id"], state=state_label,
+        agent=item["agent"], schedule=_schedule_text(item), prompt=prompt,
+    ))
+    if item.get("last_error"):
+        print(f"  ! {item['last_error']}")
+
+
+def schedule_tick(quiet: bool = False) -> int:
+    """Deliver due, approved work to visible panes in the current Rondo session."""
+    if not in_zellij():
+        if quiet:
+            return 0
+        raise RuntimeError(t("need_zellij"))
+    journal_lib = _journal_library()
+    root = repo_root()
+    require_git_repo(root)
+    try:
+        due = journal_lib.claim_due(root)
+    except journal_lib.JournalError as error:
+        raise _journal_failure(error) from None
+
+    failures = 0
+    for item in due:
+        prefix = (
+            f"[Rondo 예약 작업 {item['id']}]"
+            if LANGUAGE == "ko"
+            else f"[Rondo scheduled work {item['id']}]"
+        )
+        try:
+            if item["agent"] not in AGENTS:
+                raise RuntimeError(t("unknown", name=item["agent"]))
+            send_agent_message(item["agent"], [prefix, item["prompt"]])
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            failures += 1
+            try:
+                journal_lib.finish_job(
+                    root, item["id"], False, str(error),
+                    lease_until=item["lease_until"],
+                )
+            except journal_lib.JournalError:
+                pass
+            if not quiet:
+                print(t("schedule_failed", id=item["id"], reason=error), file=sys.stderr)
+            continue
+        try:
+            journal_lib.finish_job(
+                root, item["id"], True, lease_until=item["lease_until"]
+            )
+            record_journal(
+                root, "schedule", f"delivered: {item['prompt']}",
+                f"job:{item['id']}", agent=item["agent"],
+            )
+            if not quiet:
+                print(t("schedule_delivered", id=item["id"], agent=item["agent"]))
+        except journal_lib.JournalError as error:
+            failures += 1
+            if not quiet:
+                print(_journal_failure(error), file=sys.stderr)
+    return 1 if failures else 0
+
+
+def _schedule_add(args: list[str]) -> int:
+    journal_lib = _journal_library()
+    root = repo_root()
+    require_git_repo(root)
+    try:
+        bare, values, _ = _command_options(
+            args, {"--agent", "--every", "--at", "--cron"}
+        )
+        agent_values = values["--agent"]
+        schedules = [
+            (name[2:], entries[0])
+            for name, entries in values.items()
+            if name != "--agent" and entries
+        ]
+        if (
+            not bare or len(agent_values) != 1 or len(schedules) != 1
+            or any(len(entries) != 1 for entries in values.values() if entries)
+        ):
+            raise ValueError("invalid arguments")
+        prompt = " ".join(bare).strip()
+        agent = agent_values[0].casefold()
+        if agent not in AGENTS:
+            raise journal_lib.JournalError("invalid_agent")
+        kind, value = schedules[0]
+        item = journal_lib.propose_job(
+            root, prompt, agent, kind, value,
+            source=os.environ.get("RONDO_AGENT") or "human",
+        )
+    except ValueError as error:
+        if isinstance(error, journal_lib.JournalError):
+            raise _journal_failure(error) from None
+        raise RuntimeError(t("schedule_usage")) from None
+
+    print(t(
+        "schedule_proposed", id=item["id"], agent=item["agent"],
+        schedule=_schedule_text(item),
+    ))
+    if not os.environ.get("RONDO_AGENT") and sys.stdin.isatty() and sys.stdout.isatty():
+        _knowledge_require_user_terminal()
+        _print_schedule_job(item, full=True)
+        if _knowledge_confirm(t("schedule_confirm_approve"), checked=True):
+            item = journal_lib.job_action(root, item["id"], "approve", actor="human")
+            record_journal(
+                root, "schedule", f"approved: {item['prompt']}",
+                f"job:{item['id']}", agent=item["agent"],
+            )
+            print(t("schedule_approved", id=item["id"]))
+    return 0
+
+
+def schedule_command(args: list[str]) -> int:
+    journal_lib = _journal_library()
+    root = repo_root()
+    require_git_repo(root)
+    action = args[0] if args else "menu"
+    if action == "add":
+        return _schedule_add(args[1:])
+    if action == "tick":
+        if args[1:] not in ([], ["--quiet"]):
+            raise RuntimeError(t("schedule_usage"))
+        return schedule_tick("--quiet" in args)
+    if action == "menu":
+        if args:
+            raise RuntimeError(t("schedule_usage"))
+        return schedule_menu_command()
+
+    _knowledge_require_user_terminal()
+    try:
+        if action == "list" and len(args) == 1:
+            items = journal_lib.jobs(root, include_completed=True)
+            print(t("schedule_title"))
+            if not items:
+                print("  " + t("schedule_empty"))
+            for item in items:
+                _print_schedule_job(item)
+            return 0
+        if action in {"approve", "reject", "pause", "resume", "run", "remove"} and len(args) == 2:
+            item = journal_lib.get_job(root, args[1])
+            _print_schedule_job(item, full=True)
+            if not _knowledge_confirm(t(f"schedule_confirm_{action}"), checked=True):
+                print(t("race_cancelled"))
+                return 0
+            result = journal_lib.job_action(root, args[1], action, actor="human")
+            message = {
+                "approve": "schedule_approved", "reject": "schedule_rejected",
+                "pause": "schedule_paused", "resume": "schedule_resumed",
+                "run": "schedule_run", "remove": "schedule_removed",
+            }[action]
+            print(t(message, id=result["id"]))
+            record_journal(
+                root, "schedule", f"{action}: {item['prompt']}",
+                f"job:{item['id']}", agent=item["agent"],
+            )
+            if action == "run" and in_zellij():
+                return schedule_tick()
+            return 0
+    except journal_lib.JournalError as error:
+        raise _journal_failure(error) from None
+    raise RuntimeError(t("schedule_usage"))
+
+
+def schedule_menu_command() -> int:
+    journal_lib = _journal_library()
+    root = repo_root()
+    require_git_repo(root)
+    _knowledge_require_user_terminal()
+    try:
+        items = journal_lib.jobs(root, include_completed=True)
+    except journal_lib.JournalError as error:
+        raise _journal_failure(error) from None
+    choices = [("new", t("schedule_new"))]
+    choices.extend((
+        item["id"],
+        f"{t('schedule_state_' + item['state'])} · {item['agent']} · "
+        f"{_schedule_text(item)} — {' '.join(item['prompt'].split())[:80]}",
+    ) for item in items)
+    choices.append(("back", t("learn_back_action")))
+    selected = choose_one(t("schedule_title"), choices)
+    if selected == "back":
+        return 0
+    if selected == "new":
+        prompt = input(t("schedule_prompt")).strip()
+        agents = [name for name in configured_panels() if name in AGENTS and installed(name)]
+        if not agents:
+            agents = [name for name in AGENTS if installed(name)]
+        if not agents:
+            raise RuntimeError(t("no_available_agents"))
+        agent = choose_one(
+            t("agent_title"), [(name, AGENTS[name][2]) for name in agents]
+        )
+        kind = choose_one(t("schedule_type_title"), [
+            ("every", t("schedule_every")),
+            ("at", t("schedule_at")),
+            ("cron", t("schedule_cron")),
+        ])
+        value = input(t("schedule_value")).strip()
+        return _schedule_add([prompt, "--agent", agent, f"--{kind}", value])
+
+    item = journal_lib.get_job(root, selected)
+    actions = {
+        "pending": [("approve", t("schedule_action_approve")), ("reject", t("schedule_action_reject"))],
+        "active": [("pause", t("schedule_action_pause")), ("run", t("schedule_action_run")), ("remove", t("schedule_action_remove"))],
+        "paused": [("resume", t("schedule_action_resume")), ("run", t("schedule_action_run")), ("remove", t("schedule_action_remove"))],
+        "completed": [("remove", t("schedule_action_remove"))],
+    }[item["state"]]
+    action = choose_one(t("schedule_decision_title"), [*actions, ("back", t("learn_back_action"))])
+    return 0 if action == "back" else schedule_command([action, selected])
 
 
 def _reviewer_prompt(packet: Path) -> str:
@@ -2625,6 +3094,8 @@ def home_command() -> int:
             ("code-review", t("home_code_review")),
             ("knowledge", t("home_knowledge")),
             ("recall", t("home_recall")),
+            ("history", t("home_history")),
+            ("schedule", t("home_schedule")),
             ("git", t("home_git")),
             ("setup", t("home_setup")),
             ("exit", t("home_exit")),
@@ -2641,6 +3112,11 @@ def home_command() -> int:
     if action == "recall":
         query = input(t("home_recall_prompt")).strip()
         return recall_command([query] if query else [])
+    if action == "history":
+        query = input(t("home_recall_prompt")).strip()
+        return history_command([query] if query else [])
+    if action == "schedule":
+        return schedule_menu_command()
     if action == "git":
         return git_command([])
     if action == "setup":
@@ -2684,6 +3160,12 @@ def main() -> int:
         return learn_command(args[1:])
     elif command == "recall":
         return recall_command(args[1:])
+    elif command == "note":
+        return note_command(args[1:])
+    elif command == "history":
+        return history_command(args[1:])
+    elif command == "schedule":
+        return schedule_command(args[1:])
     elif command == "proof":
         return proof_command(args[1:])
     elif command == "review":
@@ -2722,7 +3204,7 @@ def main() -> int:
         return doctor("--deep" in args)
     elif command:
         known = [
-            "menu", "setup", "add", "send", "handoff", "resume", "task", "learn", "recall", "proof", "review",
+            "menu", "setup", "add", "send", "handoff", "resume", "task", "learn", "recall", "note", "history", "schedule", "proof", "review",
             "git", "code-review", "test", "pr", "lens", "race", "diff", "take",
             "snap", "undo", "language", "audience", "relay", "continue", "doctor",
             "kill", "clean",

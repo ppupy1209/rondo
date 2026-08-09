@@ -14,7 +14,9 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 - 모든 에이전트 패널에 함께 적용되는 사용자별 설명 수준
 - 모델·사용량·인계 상태를 한눈에 보는 공통 상태 표시줄
 - `rondo send`를 통한 화면에 보이는 에이전트 간 요청
-- 사용자 승인형 프로젝트 기억·재사용 절차와 작업 이력 검색
+- 사용자 승인형 프로젝트 기억·재사용 절차와 자동 학습 제안
+- SQLite FTS 기반의 저장소별 작업 저널·세션 검색
+- 열린 패널에만 전달되는 사용자 승인형 예약 작업
 - Rondo Lens를 통한 화면 요소 단위 프론트엔드 요청
 - Rondo Proof를 통한 실행 가능한 증거와 위험 기반 사람 검토 큐
 - 구현 세션과 물리적으로 분리되는 레드팀·블루팀·신뢰성·보안 테스트
@@ -68,6 +70,8 @@ rondo add         # 에이전트를 선택해 패널 추가
 rondo send codex "현재 diff를 검토해 주세요"  # Codex 패널에 입력하고 전송
 rondo learn pending  # 에이전트와 사용자가 제안한 프로젝트 지식 검토
 rondo recall "인증"  # 승인 지식·작업 이력·최근 Git 커밋 검색
+rondo history "인증" # 저장소의 고신호 작업 저널 검색
+rondo schedule       # 승인 대기·실행 중인 예약 작업을 선택형 메뉴로 관리
 rondo lens        # 화면 요소를 클릭해 해당 맥락만 전달
 rondo proof       # 검증 실행 후 위험 기반 검토 패킷 생성
 rondo test all --from codex --tester claude  # 구현자와 분리된 독립 테스트
@@ -81,13 +85,14 @@ rondo doctor      # 설치와 설정 진단
 
 ```text
 이 규칙을 프로젝트 기억으로 남겨줘
+매일 오전 9시에 Codex가 CI 상태를 확인하게 해줘
 현재 변경분을 독립 테스트해줘
 보안 테스트만 새 세션에서 진행해줘
 각 에이전트에게 코드 리뷰를 맡겨줘
 지난 인증 작업 내용을 찾아줘
 ```
 
-기억 제안처럼 사람의 판단이 필요한 항목은 자동 승인되지 않습니다. `shell` 탭에서 `rondo`만 실행하면 작업 메뉴가 열리고, 방향키로 제안을 골라 원문을 확인한 뒤 승인하거나 거절할 수 있습니다. 기존 `rondo learn`, `rondo test` 등의 명령은 스크립트와 세부 제어를 위해 그대로 지원합니다.
+기억·예약 제안처럼 사람의 판단이 필요한 항목은 자동 승인되지 않습니다. `shell` 탭에서 `rondo`만 실행하면 작업 메뉴가 열리고, 방향키로 원문을 확인한 뒤 승인하거나 거절할 수 있습니다. 기존 `rondo learn`, `rondo schedule`, `rondo test` 등의 명령은 스크립트와 세부 제어를 위해 그대로 지원합니다.
 
 ```text
 ┌────────────────────────────────────────────────────┐
@@ -170,7 +175,43 @@ rondo recall --id a1b2c3d4          # 절차 원문을 ID로 불러오기
 
 승인·거절·삭제는 대화형 사용자 터미널에서만 가능하며, Rondo 안에서는 현재 프로세스가 `shell` 탭에 있는지도 확인합니다. 에이전트 패널, race 탭, 파이프·스크립트 실행에서는 거부합니다. 제안은 2,000자, 승인 기억은 총 4,000자, 절차는 16개로 제한하고, 일반적인 비밀값·프롬프트 주입·파괴 명령 패턴과 보이지 않는 제어 문자를 저장 전에 차단합니다. 여러 에이전트의 동시 쓰기는 저장소별 잠금으로 직렬화하며, 손상되거나 심볼릭 링크로 바뀐 상태 파일은 사용하지 않습니다.
 
-검색 이력에는 Rondo가 만든 짧은 작업 이벤트와 Git 커밋 제목만 들어가며 Claude·Codex·Gemini 대화 원문을 수집하지 않습니다. 데이터는 네트워크 서비스 없이 `~/.cache/rondo/knowledge/`에 비공개 권한으로 저장됩니다. 같은 운영체제 사용자 권한을 이미 가진 악성 프로세스를 격리하는 비밀 저장소는 아니므로 토큰·비밀번호 같은 민감정보는 기록하지 마세요.
+검색 이력에는 Rondo가 만든 짧은 작업 이벤트와 Git 커밋 제목만 들어가며 Claude·Codex·Gemini 대화 원문을 수집하지 않습니다. 데이터는 네트워크 서비스 없이 `~/.cache/rondo/knowledge/`와 `~/.cache/rondo/journal/`에 비공개 권한으로 저장됩니다. 같은 운영체제 사용자 권한을 이미 가진 악성 프로세스를 격리하는 비밀 저장소는 아니므로 토큰·비밀번호 같은 민감정보는 기록하지 마세요.
+
+## 학습 루프·작업 저널·예약 작업
+
+새로 시작하는 모든 에이전트는 Rondo 기능을 자연어 요청에 맞춰 스스로 고릅니다. 복잡한 작업을 성공했거나 사용자 교정·오류 복구·저장소 고유 규칙을 발견하면 최소한의 기억 또는 절차를 먼저 제안합니다. 의미 있는 작업이 끝나면 대화 원문 대신 결과와 이유만 작업 저널에 남깁니다. 제안된 기억과 절차는 사람이 승인하기 전까지 다른 에이전트에 주입되지 않습니다.
+
+작업 저널은 저장소별 SQLite DB에 최대 5,000개의 구조화된 이벤트를 보관합니다. WAL 모드와 FTS5 색인을 사용해 한국어·영어를 빠르게 검색하며, FTS5가 없는 Python 배포판에서는 자동으로 일반 검색으로 돌아갑니다. DB 크기와 프롬프트 입력을 제한하고 전체 대화를 복사하지 않기 때문에 세션이 길어져도 매 요청마다 과거 원문을 다시 보내지 않습니다.
+
+```sh
+rondo note "로그인 회귀 테스트 통과" --ref tests/auth_test.py
+rondo history "로그인"       # 결과·위임·검증 이력 검색
+rondo history --sessions     # 공급자와 무관한 Rondo 세션 타임라인
+
+rondo schedule add "CI 실패 원인을 확인해줘" --agent codex --every 2h
+rondo schedule add "릴리스 체크를 실행해줘" --agent claude --at 2026-08-10T09:00:00+09:00
+rondo schedule add "평일 아침 의존성을 점검해줘" --agent codex --cron "0 9 * * 1-5"
+rondo schedule              # ID를 입력하지 않고 승인·중지·재개·즉시 실행·삭제
+```
+
+에이전트가 `schedule add`를 호출해도 제안만 만들어집니다. 예약 원문 확인과 승인·거절·중지·재개·즉시 실행·삭제는 Rondo `shell` 탭의 사용자만 할 수 있습니다. 승인된 작업도 백그라운드 셸 명령으로 실행하지 않고, Rondo 세션이 열려 있을 때 30초마다 기한을 확인해 대상 에이전트의 보이는 입력창으로 전달합니다. 패널이 승인 화면에서 멈췄거나 사라졌으면 실행하지 않고 재시도하며, 세 번 실패하면 자동으로 일시정지합니다. SQLite 임대가 여러 상태 표시줄의 동시 전달을 막습니다. 다만 메시지를 보낸 직후 프로세스가 비정상 종료되면 완료 기록을 남기지 못해 다음 확인에서 한 번 더 전달될 수 있습니다.
+
+### Hermes와 공유하는 원리, Rondo의 차이
+
+Rondo 0.11은 Hermes Agent의 지속 기억·검색 가능한 세션·예약 작업·격리 위임·점진적 절차라는 아이디어를 코딩 에이전트 오케스트레이션에 맞춰 제공합니다. 공식 Hermes 프로젝트와 제휴하거나 Hermes 런타임을 포함하는 것은 아닙니다.
+
+설계 참고: [Hermes 기능 개요](https://hermes-agent.nousresearch.com/docs/user-guide/features/overview/), [Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory/), [Sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions/), [Cron](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/cron.md), [Delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation/), [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security/)
+
+| 원리 | Rondo 구현 | 보안·제품 차이 |
+|---|---|---|
+| 지속 기억과 자기 개선 | 에이전트가 기억·절차를 능동 제안 | 저장과 재사용 사이에 변경 불가능한 사용자 승인 단계 |
+| 세션·과거 작업 검색 | 저장소별 SQLite WAL + FTS5 저널, Rondo 세션 타임라인 | 공급자 대화 원문 대신 비밀값을 가린 고신호 결과만 저장 |
+| Cron·반복 작업 | interval·ISO 시각·5필드 cron, 최대 100개 | 데몬이나 임의 셸 실행 없이 열린 패널에만 보이게 전달 |
+| 하위 에이전트 위임 | `race`, 독립 `test`, `code-review`, Claude→Codex relay | 구현·검증 세션을 물리적으로 분리하고 에이전트 간 요청도 화면에 표시 |
+| Skills·도구 선택 | 승인 절차는 요약만 주입하고 필요할 때 원문 검색 | 절차를 플러그인·실행 코드로 자동 활성화하지 않음 |
+| 공급자 선택 | Claude·Codex·Gemini·Kimi·Grok을 같은 저장소 작업공간에서 조율 | 특정 모델 API나 계정으로 작업 내용을 중앙 전송하지 않음 |
+
+Hermes의 모델 추론 속도, 프롬프트 캐싱 또는 API 라우팅 자체를 Rondo가 복제하지는 않습니다. 그 영역은 각 공급자 CLI가 담당합니다. Rondo가 줄이는 비용은 저널 색인 검색, 크기가 제한된 기억, 필요한 절차만 불러오는 점진적 공개를 통해 같은 맥락을 반복 전송하는 오케스트레이션 비용입니다. 범용 메시징 게이트웨이·음성 비서·상시 무인 실행도 코딩 작업의 권한 범위를 넓히므로 포함하지 않았습니다.
 
 ## Rondo Lens
 
@@ -389,6 +430,9 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo learn memory\|skill ...` | 저장소 기억·재사용 절차를 승인 대기로 제안 |
 | `rondo learn pending\|show\|approve\|reject\|remove` | 프로젝트 지식의 사용자 승인 수명주기 관리 |
 | `rondo recall [검색어\|--id ID]` | 승인 지식·작업 이벤트·최근 Git 이력 검색 |
+| `rondo note <요약> [--ref 참조]` | 비밀값을 가린 고신호 작업 결과를 저널에 기록 |
+| `rondo history [검색어\|--sessions]` | 저장소 작업 저널과 에이전트 세션 검색 |
+| `rondo schedule [명령]` | 사용자 승인형 반복·일회 예약 작업 관리 |
 | `rondo proof [--reviewer 에이전트]` | 검증 실행 후 독립 검토 패킷 생성 |
 | `rondo review [--budget 2m]` | 시간 예산 안에서 고위험 사람 판단부터 표시 |
 | `rondo git [명령]` | Git 연결 상태와 저장소별 PR·reviewer 정책 관리 |
@@ -437,6 +481,7 @@ zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 �
   lens/          비공개 요소 맥락 파일과 부분 스크린샷
   proof/         비공개 작업 의도, 증거 패킷, 검토 큐
   knowledge/     저장소별 승인 기억·절차와 짧은 작업 이벤트
+  journal/       저장소별 SQLite 작업 저널·세션·승인형 예약 작업
   test/          독립 테스트 worktree 상태, 보고서, k6 결과와 Grafana 캡처
   relay/         비공개 인계 패킷과 전달 로그
 ```
