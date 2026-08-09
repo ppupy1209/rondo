@@ -62,6 +62,7 @@ class IndependentTestingTest(unittest.TestCase):
 
     def test_finish_preserves_reports_and_flags_tester_source_edits(self) -> None:
         run = testing.start(self.repo, ["security"], "claude", "impl-1", ["codex"])
+        run_directory = testing.test_home(self.repo) / run.run_id
         role = run.roles["security"]
         report = Path(role["report"])
         report.parent.mkdir(parents=True)
@@ -79,6 +80,7 @@ class IndependentTestingTest(unittest.TestCase):
         self.assertTrue((Path(result["summary"]).parent / "security-violation.patch").is_file())
         self.assertIsNone(testing.load(self.repo))
         self.assertFalse(Path(role["worktree"]).exists())
+        self.assertFalse(run_directory.exists())
 
     def test_load_target_is_local_by_default(self) -> None:
         self.assertTrue(testing.allowed_load_url("http://localhost:8080/api"))

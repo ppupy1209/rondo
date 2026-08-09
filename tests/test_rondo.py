@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import runpy
@@ -27,8 +29,16 @@ class RondoTests(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.config = self.base / "config"
         self.cache = self.base / "cache"
+        self.output = io.StringIO()
+        self.errors = io.StringIO()
+        self.redirect = contextlib.redirect_stdout(self.output)
+        self.redirect_errors = contextlib.redirect_stderr(self.errors)
+        self.redirect.__enter__()
+        self.redirect_errors.__enter__()
 
     def tearDown(self):
+        self.redirect_errors.__exit__(None, None, None)
+        self.redirect.__exit__(None, None, None)
         self.temp.cleanup()
 
     def test_session_names_are_safe(self):
@@ -98,8 +108,9 @@ class RondoTests(unittest.TestCase):
             patch.dict(
                 scope,
                 {
-                    "repo_root": lambda: Path("/tmp/project"),
-                    "rondo_session_name": lambda _root, _custom=None: "rondo-project",
+                "repo_root": lambda: Path("/tmp/project"),
+                "rondo_session_name": lambda _root, _custom=None: "rondo-project",
+                "require_git_repo": lambda _root: None,
                     "zellij_sessions": lambda: (set(), {"rondo-project"}),
                     "installed": lambda _name: True,
                     "write_layout": lambda _panels: Path("/tmp/layout.kdl"),
@@ -177,6 +188,7 @@ class RondoTests(unittest.TestCase):
                 "setup": setup,
                 "repo_root": lambda: self.base,
                 "rondo_session_name": lambda _root, _custom=None: "rondo-first",
+                "require_git_repo": lambda _root: None,
                 "zellij_sessions": lambda: (set(), set()),
                 "installed": lambda _name: True,
                 "write_layout": lambda _panels: self.base / "layout.kdl",
@@ -247,11 +259,13 @@ class RondoTests(unittest.TestCase):
         ):
             self.assertEqual(rondo["code_review_command"](["all"]), 0)
 
-        self.assertEqual(run.call_count, 4)
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertTrue(all(command[:3] == ["zellij", "action", "new-pane"] for command in commands))
-        self.assertIn("plan", commands[0])
-        self.assertIn("read-only", commands[1])
+        run.assert_called_once()
+        command = run.call_args.args[0]
+        self.assertEqual(command[:3], ["zellij", "action", "new-tab"])
+        layout = command[-1]
+        self.assertEqual(layout.count('name="review-'), 4)
+        self.assertIn("plan", layout)
+        self.assertIn("read-only", layout)
 
     def test_same_vendor_tester_never_resumes_implementation_session(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -289,6 +303,25 @@ class RondoTests(unittest.TestCase):
         self.assertIn('tab name="test-run123"', layout)
         self.assertNotIn("resume", layout)
         self.assertNotIn("--last", layout)
+
+    def test_test_layout_keeps_unicode_as_valid_kdl_text(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        from rondo import testing as testing_lib
+
+        run = unittest.mock.Mock(
+            run_id="한글",
+            roles={"review": {"agent": "codex", "worktree": "/tmp/한글 저장소"}},
+        )
+        scope = rondo["test_layout"].__globals__
+        with (
+            patch.object(testing_lib, "role_prompt", return_value="한국어 검증"),
+            patch.object(scope["shutil"], "which", return_value="/bin/codex"),
+        ):
+            layout = rondo["test_layout"](run)
+
+        self.assertIn("한국어 검증", layout)
+        self.assertIn("한글 저장소", layout)
+        self.assertNotIn("\\u", layout)
 
     def test_test_finish_waits_for_every_independent_report(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -408,20 +441,57 @@ class RondoTests(unittest.TestCase):
             ]
         )
         listed = subprocess.CompletedProcess([], 0, stdout=panes)
+        ready = subprocess.CompletedProcess([], 0, stdout="❯")
+        pasted = subprocess.CompletedProcess([], 0, stdout="review the diff")
+        done = subprocess.CompletedProcess([], 0, stdout="")
         with (
             patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
-            patch.object(scope["subprocess"], "run", side_effect=[listed, None, None]) as run,
+            patch.object(scope["subprocess"], "run", side_effect=[listed, ready, done, pasted, done]) as run,
         ):
             rondo["send_agent_message"]("codex", ["review", "the", "diff"])
 
         self.assertEqual(
-            run.call_args_list[1].args[0],
+            run.call_args_list[2].args[0],
             ["zellij", "action", "paste", "--pane-id", "2", "--", "review the diff"],
         )
         self.assertEqual(
-            run.call_args_list[2].args[0],
+            run.call_args_list[4].args[0],
             ["zellij", "action", "send-keys", "--pane-id", "2", "Enter"],
         )
+
+    def test_agent_message_never_accepts_a_trust_prompt(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["send_agent_message"].__globals__
+        panes = json.dumps(
+            [{"id": 2, "title": "claude", "tab_name": "agents", "is_plugin": False, "exited": False}]
+        )
+        listed = subprocess.CompletedProcess([], 0, stdout=panes)
+        trust = subprocess.CompletedProcess(
+            [], 0, stdout="Quick safety check: Is this a project you created or one you trust?\nEnter to confirm · Esc to cancel"
+        )
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.object(scope["subprocess"], "run", side_effect=[listed, trust]) as run,
+        ):
+            with self.assertRaises(rondo["PaneNotReady"]):
+                rondo["send_agent_message"]("claude", ["do not approve"])
+
+        self.assertEqual(run.call_count, 2)
+
+    def test_agent_message_is_not_submitted_without_visible_delivery(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["_send_to_pane"].__globals__
+        ready = subprocess.CompletedProcess([], 0, stdout="❯")
+        done = subprocess.CompletedProcess([], 0, stdout="")
+        with (
+            patch.object(scope["subprocess"], "run", side_effect=[ready, done, ready, done]) as run,
+            patch.object(scope["time"], "monotonic", side_effect=[0, 0, 2]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "visible|확인"):
+                rondo["_send_to_pane"]("codex", "2", "continue", ["zellij"])
+
+        self.assertNotIn("Enter", run.call_args_list[-1].args[0])
+        self.assertIn("Esc", run.call_args_list[-1].args[0])
 
     def test_agent_message_can_target_an_existing_session(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -430,10 +500,13 @@ class RondoTests(unittest.TestCase):
             [{"id": 7, "title": "codex", "tab_name": "agents", "is_plugin": False, "exited": False}]
         )
         listed = subprocess.CompletedProcess([], 0, stdout=panes)
-        with patch.object(scope["subprocess"], "run", side_effect=[listed, None, None]) as run:
+        ready = subprocess.CompletedProcess([], 0, stdout="❯")
+        pasted = subprocess.CompletedProcess([], 0, stdout="continue")
+        done = subprocess.CompletedProcess([], 0, stdout="")
+        with patch.object(scope["subprocess"], "run", side_effect=[listed, ready, done, pasted, done]) as run:
             rondo["send_agent_message"]("codex", ["continue"], session_name="rondo-project")
         self.assertEqual(
-            run.call_args_list[1].args[0],
+            run.call_args_list[2].args[0],
             ["zellij", "-s", "rondo-project", "action", "paste", "--pane-id", "7", "--", "continue"],
         )
 
@@ -541,7 +614,10 @@ class RondoTests(unittest.TestCase):
         sender = unittest.mock.Mock()
         with (
             patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
-            patch.dict(scope, {"send_agent_message": sender}),
+            patch.dict(scope, {
+                "send_agent_message": sender,
+                "agent_panes": lambda: {"claude": "1", "codex": "2"},
+            }),
         ):
             rondo["audience_command"]("guided")
 
@@ -562,6 +638,132 @@ class RondoTests(unittest.TestCase):
             expected.insert(0, sys.executable)
             program = sys.executable
         execv.assert_called_once_with(program, expected)
+
+    def test_unknown_command_is_rejected_instead_of_creating_a_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["main"].__globals__
+        opener = unittest.mock.Mock()
+        with (
+            patch.dict(scope, {"open_session": opener}),
+            patch.object(scope["sys"], "argv", ["rondo", "prooof"]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "proof"):
+                rondo["main"]()
+        opener.assert_not_called()
+
+    def test_open_session_requires_a_git_repository(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["open_session"].__globals__
+        with (
+            patch.dict(scope, {"repo_root": lambda: self.base}),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Git"):
+                rondo["open_session"]()
+
+    def test_missing_configured_agent_is_skipped(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        rondo["write_setting"]("panels", "claude kimi")
+        scope = rondo["open_session"].__globals__
+        layouts = []
+        with (
+            patch.dict(scope, {
+                "repo_root": lambda: self.base,
+                "require_git_repo": lambda _root: None,
+                "git_policy": lambda _root: "direct",
+                "zellij_sessions": lambda: (set(), set()),
+                "installed": lambda name: name == "claude",
+                "write_layout": lambda panels: layouts.append(panels) or self.base / "layout.kdl",
+            }),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["os"], "chdir"),
+            patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                rondo["open_session"]()
+        self.assertEqual(layouts, [["claude"]])
+
+    def test_session_list_only_shows_rondo_sessions(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["list_sessions"].__globals__
+        with patch.dict(scope, {
+            "zellij_sessions": lambda: ({"rondo-project", "other"}, {"rondo-old"}),
+            "repo_root": lambda: self.base,
+            "git_output": lambda _root, *args: "false",
+        }):
+            rondo["list_sessions"]()
+        output = self.output.getvalue()
+        self.assertIn("rondo-project", output)
+        self.assertIn("rondo-old", output)
+        self.assertNotIn("other", output)
+
+    def test_kill_only_targets_a_named_rondo_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["kill_session"].__globals__
+        with (
+            patch.dict(scope, {"zellij_sessions": lambda: ({"rondo-project"}, set())}),
+            patch.object(scope["subprocess"], "run") as run,
+        ):
+            rondo["kill_session"]("rondo-project")
+        run.assert_called_once_with(
+            ["zellij", "delete-session", "--force", "rondo-project"], check=True
+        )
+        with self.assertRaises(RuntimeError):
+            rondo["kill_session"]("unrelated")
+
+    def test_clean_removes_only_caches_for_deleted_repositories(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        cache = rondo["CACHE_DIR"]
+        missing = self.base / "deleted"
+        cache.mkdir(parents=True)
+        (cache / "claude.dead.json").write_text(json.dumps({"project": str(missing)}))
+        stale = cache / "proof" / "stale"
+        stale.mkdir(parents=True)
+        (stale / "latest.json").write_text(json.dumps({"root": str(missing)}))
+        live = cache / "proof" / "live"
+        live.mkdir(parents=True)
+        (live / "latest.json").write_text(json.dumps({"root": str(self.base)}))
+
+        self.assertEqual(rondo["clean_cache"](), 2)
+        self.assertFalse((cache / "claude.dead.json").exists())
+        self.assertFalse(stale.exists())
+        self.assertTrue(live.exists())
+
+    def test_pr_without_origin_reports_the_missing_remote(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["pr_command"].__globals__
+        with patch.dict(scope, {
+            "repo_root": lambda: self.base,
+            "require_git_repo": lambda _root: None,
+            "git_origin": lambda _root: "",
+        }):
+            with self.assertRaisesRegex(RuntimeError, "origin"):
+                rondo["pr_command"]([])
+
+    def test_status_bar_compacts_whole_agents_before_truncating(self):
+        from rondo.model import Snapshot, Window
+
+        status = load_script("ai-status", self.config, self.cache)
+        reset = time.time() + 3600
+        adapters = []
+        for name in ("claude", "codex", "gemini"):
+            adapter = unittest.mock.Mock()
+            adapter.snapshot.return_value = Snapshot(
+                name, f"{name}-very-long-model high",
+                [Window("5h", 93, reset), Window("wk", 53, reset)],
+            )
+            adapters.append((name, adapter))
+        scope = status["line"].__globals__
+        with patch.dict(scope, {
+            "AGENTS": adapters,
+            "open_panes": lambda: None,
+            "relay_field": lambda _root: None,
+        }):
+            text = status["line"](self.base, 60)
+
+        self.assertLess(len(text), 60)
+        self.assertTrue(all(name in text for name in ("cl", "cx", "gm")))
+        self.assertGreaterEqual(text.count("%"), 3)
 
 
 class AgentSessionTests(unittest.TestCase):
@@ -805,6 +1007,23 @@ class RelayTests(unittest.TestCase):
         self.assertIn(str(packet), command[-1])
         index = json.loads((directory / "pending.json").read_text())
         self.assertEqual(index["status"], "sent")
+
+    def test_auto_relay_downgrades_when_codex_needs_user_input(self):
+        relay = load_script("rondo-relay", self.config, self.cache)
+        directory = relay["relay_dir"](self.repo)
+        packet = directory / "packets" / "handoff.md"
+        packet.parent.mkdir(parents=True)
+        packet.write_text("handoff")
+        blocked = subprocess.CompletedProcess([], relay["PANE_NOT_READY"], "", "trust prompt")
+        scope = relay["run_auto"].__globals__
+
+        with patch.object(scope["subprocess"], "run", return_value=blocked):
+            self.assertEqual(relay["run_auto"](directory, packet, self.repo), 0)
+
+        self.assertEqual((relay["CONFIG_DIR"] / "relay").read_text().strip(), "ready")
+        index = json.loads((directory / "pending.json").read_text())
+        self.assertEqual(index["status"], "ready")
+        self.assertIn("user decision", index["reason"])
 
     def test_claude_status_triggers_ready_packet(self):
         config = self.config / "rondo"

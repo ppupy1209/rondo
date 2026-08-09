@@ -178,7 +178,11 @@ def start(
 
     run_id = uuid.uuid4().hex[:8]
     directory = test_home(root) / run_id
-    base, parent = freeze_base(root, directory)
+    try:
+        base, parent = freeze_base(root, directory)
+    except TestError:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
     run = TestRun(
         root=root.resolve(), run_id=run_id, base=base, parent=parent,
         implementer=implementer, implementer_session=implementer_session,
@@ -202,6 +206,7 @@ def start(
     except TestError:
         for worktree in made:
             git(root, "worktree", "remove", "--force", str(worktree), check=False)
+        shutil.rmtree(directory, ignore_errors=True)
         raise
     save(run)
     return run
@@ -317,6 +322,7 @@ def finish(run: TestRun) -> dict:
             lines.append(f"  - Product source changed by tester: {', '.join(item['violations'])}")
     summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.chmod(summary, 0o600)
+    shutil.rmtree(test_home(run.root) / run.run_id, ignore_errors=True)
     state_path(run.root).unlink(missing_ok=True)
     git(run.root, "worktree", "prune", check=False)
     return {"summary": str(summary), "results": results}
@@ -325,6 +331,7 @@ def finish(run: TestRun) -> dict:
 def abort(run: TestRun) -> None:
     for role in run.roles.values():
         _remove_worktree(run.root, Path(role["worktree"]))
+    shutil.rmtree(test_home(run.root) / run.run_id, ignore_errors=True)
     state_path(run.root).unlink(missing_ok=True)
     git(run.root, "worktree", "prune", check=False)
 

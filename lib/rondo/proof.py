@@ -24,6 +24,8 @@ HIGH_MARKERS = {
 }
 LOW_PARTS = {"test", "tests", "docs", "fixtures", "snapshots"}
 LOW_SUFFIXES = {".md", ".txt", ".rst"}
+GENERATED_PARTS = {"__pycache__", "node_modules", "dist", "build", ".venv", "target"}
+GENERATED_SUFFIXES = {".pyc", ".pyo"}
 
 
 def proof_home(root: Path) -> Path:
@@ -48,6 +50,7 @@ def record_task(
 ) -> dict:
     task = {
         "schema": 1,
+        "root": str(root.resolve()),
         "goal": goal.strip(),
         "acceptance": [x.strip() for x in acceptance or [] if x.strip()],
         "must_not": [x.strip() for x in must_not or [] if x.strip()],
@@ -71,10 +74,30 @@ def load_task(root: Path) -> dict:
 def changed_files(root: Path) -> list[str]:
     tracked = git(root, "diff", "--name-only", "HEAD", check=False).splitlines()
     untracked = git(root, "ls-files", "--others", "--exclude-standard", check=False).splitlines()
-    return sorted({path for path in tracked + untracked if path})
+    return sorted({path for path in tracked + untracked if path and not generated_path(path)})
 
 
-def risk_for(path: str, scope: list[str] | None = None) -> dict:
+def generated_path(path: str) -> bool:
+    lowered = path.replace("\\", "/").casefold()
+    parts = set(Path(lowered).parts)
+    return bool(parts & GENERATED_PARTS or Path(lowered).suffix in GENERATED_SUFFIXES)
+
+
+def changed_lines(root: Path, path: str) -> int:
+    row = git(root, "diff", "--numstat", "HEAD", "--", path, check=False).splitlines()
+    if row:
+        columns = row[-1].split("\t")
+        if len(columns) >= 2:
+            return sum(int(value) for value in columns[:2] if value.isdigit())
+    target = root / path
+    try:
+        data = target.read_bytes()
+    except OSError:
+        return 0
+    return 0 if b"\0" in data else max(1, data.count(b"\n"))
+
+
+def risk_for(path: str, scope: list[str] | None = None, lines: int = 0) -> dict:
     normalized = path.replace("\\", "/").strip("/")
     lowered = normalized.casefold()
     parts = set(Path(lowered).parts)
@@ -83,13 +106,25 @@ def risk_for(path: str, scope: list[str] | None = None) -> dict:
     scoped = not prefixes or any(
         lowered == prefix or lowered.startswith(prefix + "/") for prefix in prefixes
     )
+    reasons = []
     if not scoped:
-        return {"path": path, "level": "high", "reason": "scope_drift", "seconds": 90}
+        reasons.append("scope_drift")
     if parts & HIGH_MARKERS or tokens & HIGH_MARKERS:
-        return {"path": path, "level": "high", "reason": "sensitive_path", "seconds": 90}
-    if parts & LOW_PARTS or Path(lowered).suffix in LOW_SUFFIXES:
-        return {"path": path, "level": "low", "reason": "tests_or_docs", "seconds": 10}
-    return {"path": path, "level": "medium", "reason": "code_change", "seconds": 35}
+        reasons.append("sensitive_path")
+    if reasons:
+        level, seconds = "high", min(300, 45 + lines)
+    elif parts & LOW_PARTS or Path(lowered).suffix in LOW_SUFFIXES:
+        level, reasons, seconds = "low", ["tests_or_docs"], min(60, 5 + lines // 2)
+    else:
+        level, reasons, seconds = "medium", ["code_change"], min(180, 20 + lines)
+    return {
+        "path": path,
+        "level": level,
+        "reason": " + ".join(reasons),
+        "reasons": reasons,
+        "lines": lines,
+        "seconds": seconds,
+    }
 
 
 def discover_checks(root: Path) -> list[list[str]]:
@@ -162,18 +197,19 @@ def _dedupe(commands: list[list[str]]) -> list[list[str]]:
 
 def build(root: Path, run_checks: bool = True) -> dict:
     task = load_task(root)
-    files = [risk_for(path, task.get("scope")) for path in changed_files(root)]
+    paths = changed_files(root)
+    files = [risk_for(path, task.get("scope"), changed_lines(root, path)) for path in paths]
     commands = _dedupe([*(task.get("checks") or []), *discover_checks(root)])
-    checks = [run_check(root, command) for command in commands] if run_checks else []
+    checks = [run_check(root, command) for command in commands] if files and run_checks else []
 
     human = []
-    if not task:
+    if files and not task:
         human.append({"level": "high", "label": "Task intent is not recorded", "seconds": 60})
-    elif not task.get("acceptance"):
+    elif files and not task.get("acceptance"):
         human.append({"level": "medium", "label": "Acceptance criteria need confirmation", "seconds": 45})
-    if not commands:
+    if files and not commands:
         human.append({"level": "medium", "label": "No executable checks were discovered", "seconds": 30})
-    elif not run_checks:
+    elif files and not run_checks:
         human.append({"level": "medium", "label": "Executable checks were skipped", "seconds": 30})
     for check in checks:
         if check["status"] != "passed":
@@ -186,15 +222,13 @@ def build(root: Path, run_checks: bool = True) -> dict:
         if item["level"] == "high":
             human.append({
                 "level": "high", "label": item["path"],
-                "reason": item["reason"], "seconds": item["seconds"],
+                "reason": item["reason"], "lines": item["lines"], "seconds": item["seconds"],
             })
-    medium = [item["path"] for item in files if item["level"] == "medium"]
-    if medium:
-        human.append({
-            "level": "medium",
-            "label": f"Review {len(medium)} code file(s): {', '.join(medium[:4])}",
-            "seconds": min(120, 30 + len(medium) * 10),
-        })
+        elif item["level"] == "medium":
+            human.append({
+                "level": "medium", "label": item["path"],
+                "reason": item["reason"], "lines": item["lines"], "seconds": item["seconds"],
+            })
 
     passed = sum(check["status"] == "passed" for check in checks)
     failed = sum(check["status"] != "passed" for check in checks)
@@ -215,7 +249,11 @@ def build(root: Path, run_checks: bool = True) -> dict:
             "low": sum(item["level"] == "low" for item in files),
             "passed": passed,
             "failed": failed,
-            "verdict": "ready" if task and task.get("acceptance") and commands and not human else "review",
+            "verdict": (
+                "empty" if not files
+                else "ready" if task and task.get("acceptance") and commands and not human
+                else "review"
+            ),
         },
     }
     directory = proof_home(root)
@@ -286,7 +324,16 @@ def markdown(proof: dict) -> str:
         lines += ["No checks were run.", ""]
     lines += ["## Human review queue", ""]
     for item in proof.get("human") or []:
-        lines.append(f"- **{item['level']}** · {item['label']} · ~{item['seconds']}s")
+        details = " · ".join(
+            value for value in (
+                item.get("reason", ""),
+                f"{item['lines']} changed lines" if "lines" in item else "",
+            ) if value
+        )
+        lines.append(
+            f"- **{item['level']}** · {item['label']}"
+            f"{f' · {details}' if details else ''} · ~{item['seconds']}s"
+        )
     if not proof.get("human"):
         lines.append("- No mandatory human review item was found.")
     return "\n".join(lines) + "\n"

@@ -58,8 +58,7 @@ def _head(root: Path) -> str | None:
         return None  # 커밋이 하나도 없는 레포
 
 
-def snapshot(root: Path, label: str = "") -> Snap:
-    """지금 작업 트리를 커밋 객체 하나로 굳힌다. 트리·인덱스·브랜치는 안 건드린다."""
+def _snapshot_commit(root: Path, label: str = "") -> tuple[str, float]:
     stamp = time.time()
     with tempfile.TemporaryDirectory() as workspace:
         env = dict(os.environ, GIT_INDEX_FILE=str(Path(workspace) / "index"))
@@ -77,6 +76,12 @@ def snapshot(root: Path, label: str = "") -> Snap:
     if parent:
         commit_args += ["-p", parent]
     sha = git(root, *commit_args).strip()
+    return sha, stamp
+
+
+def snapshot(root: Path, label: str = "") -> Snap:
+    """지금 작업 트리를 커밋 객체 하나로 굳힌다. 트리·인덱스·브랜치는 안 건드린다."""
+    sha, stamp = _snapshot_commit(root, label)
 
     ref = f"{REF_PREFIX}/{time.time_ns()}"
     git(root, "update-ref", ref, sha, "-m", label or "rondo snapshot")
@@ -121,12 +126,27 @@ def dirty_against(root: Path, snap: Snap) -> bool:
     return changed
 
 
-def undo(root: Path, steps: int = 1) -> dict:
+def find_snapshot(root: Path, value: str) -> Snap:
+    matches = [snap for snap in snapshots(root) if snap.sha.startswith(value.casefold())]
+    if len(matches) != 1:
+        raise GitError(f"알 수 없거나 모호한 스냅샷 ID: {value}")
+    return matches[0]
+
+
+def preview(root: Path, target: Snap) -> list[str]:
+    current, _ = _snapshot_commit(root, "rondo undo preview")
+    return git(root, "diff", "--name-status", target.sha, current).splitlines()
+
+
+def undo(root: Path, steps: int = 1, target_id: str | None = None) -> dict:
     """작업 트리를 steps 개 전 스냅샷 시점으로 되돌린다. 커밋은 건드리지 않는다."""
     history = snapshots(root)
-    if len(history) < steps:
+    if target_id:
+        target = find_snapshot(root, target_id)
+    elif len(history) < steps:
         raise GitError("되돌릴 스냅샷이 없습니다")
-    target = history[steps - 1]
+    else:
+        target = history[steps - 1]
 
     # 되돌리기 직전 상태를 남긴다 — undo 를 다시 undo 할 수 있어야 한다
     before = snapshot(root, "rondo undo 직전")

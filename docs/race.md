@@ -22,7 +22,7 @@ tmux 로는 원리적으로 안 되고, API 키 기반 오케스트레이터는 
 | 명령 | 하는 일 |
 |---|---|
 | `rondo race "<과제>"` | 참가자 선정 → worktree 생성 → race 탭에 패널 띄우고 프롬프트 투입 |
-| `rondo race --agents claude,codex` | 참가자 직접 지정 (기본은 한도 여유 있는 전원) |
+| `rondo race "<과제>" --agents claude,codex` | 참가자 직접 지정 (기본은 한도 여유 있는 전원) |
 | `rondo race --status` | 진행 중인 race 요약 |
 | `rondo diff [에이전트]` | 결과 비교 / 개별 diff |
 | `rondo take <에이전트>` | 채택해서 원본 트리에 반영, 나머지 폐기 |
@@ -197,9 +197,11 @@ tests/test_race.py    임시 레포로 전 과정
 
 ```sh
 rondo snap [라벨]      지금 상태를 스냅샷
-rondo undo             마지막 스냅샷 시점으로 작업 트리 복구
-rondo undo --list      스냅샷 목록
-rondo undo 2           두 단계 전으로
+rondo undo             마지막 스냅샷을 미리 보고 확인 후 복구
+rondo undo --list      스냅샷 ID 목록
+rondo undo a1b2c3d4    지정한 ID로 복구
+rondo undo --steps 2   두 단계 전으로
+rondo undo --yes       비대화형 실행 시에만 확인 생략
 ```
 
 ## 스냅샷

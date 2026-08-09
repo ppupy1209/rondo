@@ -22,6 +22,7 @@ MAX_TRANSCRIPT_BYTES = 2_000_000
 MAX_MESSAGE_CHARS = 6_000
 MAX_PACKET_CHARS = 30_000
 WINDOWS = os.name == "nt"
+PANE_NOT_READY = 3
 
 SECRET_PATTERNS = (
     re.compile(r"\b(sk-[A-Za-z0-9_-]{12,})\b"),
@@ -248,6 +249,13 @@ def run_auto(directory: Path, packet_path: Path, root: Path) -> int:
     output = result.stdout + result.stderr
     if output:
         atomic_write(log, output)
+    if result.returncode == PANE_NOT_READY:
+        atomic_write(CONFIG_DIR / "relay", "ready\n")
+        write_index(
+            directory, packet_path, root, "ready", mode="ready", log=str(log),
+            reason="target pane requires a user decision",
+        )
+        return 0
     status = "sent" if result.returncode == 0 else "failed"
     write_index(directory, packet_path, root, status, log=str(log), result=result.returncode)
     return result.returncode

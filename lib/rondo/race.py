@@ -130,6 +130,7 @@ def start(root: Path, task: str, agents: list[str]) -> Race:
     except RaceError:
         for path in made:  # 절반만 만들어진 상태를 남기지 않는다
             _remove_worktree(root, path)
+        shutil.rmtree(race_home(root) / race.run_id, ignore_errors=True)
         raise
 
     atomic_json(state_path(root), race.to_json())

@@ -104,7 +104,7 @@ rondo audience guided
 rondo audience default
 ```
 
-Every agent pane started by Rondo receives the saved level automatically, including supported restored sessions. When `rondo audience` runs inside an active Rondo session, the update is also entered visibly into every open agent pane and applies to future replies. For unattended setup, use `RONDO_AUDIENCE=default|nondev|guided`.
+Every agent pane started by Rondo receives the saved level automatically, including supported restored sessions. When `rondo audience` runs inside an active Rondo session, the update is also entered visibly into every open agent pane and applies to future replies. This broadcast can consume agent usage, so Rondo shows the number of target panes first. For unattended setup, use `RONDO_AUDIENCE=default|nondev|guided`.
 
 ## Shared approval mode
 
@@ -128,6 +128,8 @@ rondo send gemini "Research another implementation approach"
 ```
 
 Run the command inside a Rondo session, with the target pane open. An agent can invoke the same command through its shell tool, so manual prompts, agent delegation, and automatic relay all use one visible input path.
+
+Before delivery, Rondo reads the pane screen and stops without pressing a key when it sees a trust, approval, or selection prompt. On a safe screen it pastes first, verifies that the message is visible in the input, and only then presses Enter. Rondo never approves folder trust on the user's behalf.
 
 ## Rondo Lens
 
@@ -161,11 +163,28 @@ rondo review --budget 2m       # show highest-risk items that fit two minutes
 rondo proof --reviewer codex   # open a separate read-only Codex verifier
 ```
 
-Rondo classifies changed files as low, medium, or high risk. Authentication, permissions, payments, migrations, security, deployment paths, and changes outside the declared scope are high risk. Documentation and test-only changes are low risk. Python unittest, npm test/lint, Gradle, Cargo, and Go checks are discovered from project files; add task-specific commands with `--check "command"`.
+Rondo classifies changed files as low, medium, or high risk. Authentication, permissions, payments, migrations, security, deployment paths, and changes outside the declared scope are high risk; overlapping reasons are all shown. Review time scales with changed lines, while generated paths such as `__pycache__`, `dist`, `build`, `node_modules`, `.venv`, and `target` are excluded. A clean tree is reported as `no changes`, never as an approval candidate. Python unittest, npm test/lint, Gradle, Cargo, and Go checks are discovered from project files; add task-specific commands with `--check "command"`.
 
 The independent reviewer starts in a fresh pane without the implementer's conversation. Codex uses a read-only sandbox and Claude uses plan permissions. It is instructed to inspect the actual diff, challenge the evidence, and find the strongest counterexample without editing implementation code. `ready` means approval candidate, not automatic approval; sensitive changes always remain in the human queue.
 
 Task intent and proof packets stay under `~/.cache/rondo/proof/` with mode `0600` and are not committed. Check output can contain project data, so inspect a packet before sharing it outside the machine.
+
+## Race, snapshots, and restore
+
+```sh
+rondo race "compare two implementations" --agents claude,codex
+rondo race --status                 # inspect progress
+rondo diff codex                    # inspect one result
+rondo take codex                    # apply the selected result
+rondo race --abort                  # discard results but preserve patches
+
+rondo snap "before refactor"
+rondo undo --list                   # list snapshot IDs
+rondo undo a1b2c3d4                 # preview paths, confirm, then restore this ID
+rondo undo --steps 2 --yes          # non-interactive restore two snapshots back
+```
+
+`undo` restores only the working tree and never rewrites commit history. Because untracked files are included, it shows the affected paths and asks for `y/N` confirmation by default; use `--yes` only in intentional automation. The state immediately before restoration is also preserved as a snapshot.
 
 ## Independent tests separated from implementation
 
@@ -301,7 +320,7 @@ A continuity packet contains:
 
 Packets live under `~/.cache/rondo/relay/`, use file mode `0600`, redact common token formats, and are deduplicated per Claude session and reset window. They are never committed. In `ready` mode, nothing is sent to Codex until you run `rondo continue`.
 
-`auto` is deliberately opt-in and requires Codex to be selected as a pane. Rondo types a visible handoff prompt into that pane and submits it exactly like terminal input. The prompt points to the private packet, which carries the current intent, Git state, and safety contract.
+`auto` is deliberately opt-in and requires Codex to be selected as a pane. Rondo types a visible handoff prompt into that pane and submits it exactly like terminal input. If Codex is waiting at a trust or approval prompt, delivery stops and the mode is downgraded to `ready`. The prompt points to the private packet, which carries the current intent, Git state, and safety contract.
 
 ## Supported agents
 
@@ -334,11 +353,17 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo handoff [note]` | Create `.rondo/handoff.md` for another computer |
 | `rondo resume [claude\|codex]` | Open the workspace and deliver the handoff to one agent |
 | `rondo lens [URL]` | Click a UI element and send its focused context after confirmation |
+| `rondo race <task> [options]` | Run one task in several isolated worktrees |
+| `rondo diff [agent]` / `rondo take <agent>` | Compare race results / apply one result |
+| `rondo snap [label]` | Snapshot the current working tree |
+| `rondo undo [ID\|--steps N] [--yes]` | Preview affected paths and restore the working tree |
+| `rondo kill [session]` | Stop this project's or a named Rondo session |
+| `rondo clean` | Remove local cache entries for deleted repositories |
 | `rondo language` | Switch Korean / English |
 | `rondo relay [off\|ready\|auto]` | Inspect or change the continuity strategy |
 | `rondo continue` | Send the pending handoff to the existing Codex pane |
 | `rondo doctor` | Check zellij, agents, and configuration |
-| `rondo -l` | List persistent sessions |
+| `rondo -l` | List only Rondo-managed sessions |
 | `handoff --init` | Enable the optional Git handoff log on macOS/Linux |
 
 Inside zellij: `Ctrl+p` + arrows moves panes, `Ctrl+t` + arrows moves tabs, and `Ctrl+o` then `d` detaches.
@@ -383,6 +408,12 @@ sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
 
 GitHub Actions runs the Python suite and installer smoke tests on macOS, Linux, and Windows.
+
+### Internal notes
+
+- [Adapter layer](docs/adapters.md) — how Rondo reads what each CLI leaves on disk
+- [rondo race](docs/race.md) — one task, several agents, one human pick
+- [Hands-on audit · 2026-08-09](docs/audit-2026-08-09.md) — every command exercised on 0.7.0, with findings (Korean)
 
 ## License
 

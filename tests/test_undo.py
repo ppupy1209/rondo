@@ -127,6 +127,24 @@ class UndoTest(UndoTestBase):
         undo_mod.undo(self.repo, steps=2)
         self.assertEqual((self.repo / "app.py").read_text(), "print('hello')\n")
 
+    def test_snapshot_id_selects_the_exact_target(self) -> None:
+        first = undo_mod.snapshot(self.repo, "first")
+        (self.repo / "app.py").write_text("print('second')\n")
+        undo_mod.snapshot(self.repo, "second")
+        (self.repo / "app.py").write_text("print('third')\n")
+
+        changes = undo_mod.preview(self.repo, first)
+        result = undo_mod.undo(self.repo, target_id=first.short)
+
+        self.assertTrue(any("app.py" in row for row in changes))
+        self.assertEqual(result["target"], first.short)
+        self.assertEqual((self.repo / "app.py").read_text(), "print('hello')\n")
+
+    def test_unknown_snapshot_id_is_rejected(self) -> None:
+        undo_mod.snapshot(self.repo, "known")
+        with self.assertRaisesRegex(GitError, "does-not-exist|스냅샷"):
+            undo_mod.undo(self.repo, target_id="does-not-exist")
+
 
 if __name__ == "__main__":
     unittest.main()

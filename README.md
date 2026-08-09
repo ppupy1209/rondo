@@ -104,7 +104,7 @@ rondo audience guided
 rondo audience default
 ```
 
-Rondo가 시작하는 모든 에이전트 패널과 지원되는 복원 세션에는 저장된 단계가 자동 적용됩니다. 열린 Rondo 세션 안에서 `rondo audience`를 실행하면 모든 에이전트 패널에 새 기준이 화면에 보이게 전달되고 이후 답변부터 적용됩니다. 대화형 설정 없이 사용하려면 `RONDO_AUDIENCE=default|nondev|guided`를 지정합니다.
+Rondo가 시작하는 모든 에이전트 패널과 지원되는 복원 세션에는 저장된 단계가 자동 적용됩니다. 열린 Rondo 세션 안에서 `rondo audience`를 실행하면 모든 에이전트 패널에 새 기준이 화면에 보이게 전달되고 이후 답변부터 적용됩니다. 이 브로드캐스트는 에이전트 사용량을 소모할 수 있으므로 Rondo가 대상 패널 수를 먼저 알립니다. 대화형 설정 없이 사용하려면 `RONDO_AUDIENCE=default|nondev|guided`를 지정합니다.
 
 ## 공통 승인 모드
 
@@ -128,6 +128,8 @@ rondo send gemini "다른 구현 방식을 조사해 주세요"
 ```
 
 Rondo 세션 안에서 대상 패널이 열린 상태로 실행해야 합니다. 각 에이전트도 셸 도구에서 같은 명령을 실행할 수 있으므로 사용자의 직접 요청, 에이전트 간 위임, 자동 인계가 모두 화면에 보이는 하나의 입력 경로를 사용합니다.
+
+전송 전에 패널 화면을 읽어 신뢰·승인·선택 프롬프트가 보이면 아무 키도 누르지 않고 중단합니다. 안전한 화면에서는 메시지를 먼저 붙여넣고 입력란에 실제로 보이는지 확인한 뒤에만 Enter를 보냅니다. 따라서 Rondo가 사용자 대신 폴더 신뢰 여부를 승인하지 않습니다.
 
 ## Rondo Lens
 
@@ -161,11 +163,28 @@ rondo review --budget 2m       # 2분 안에 볼 고위험 항목부터 표시
 rondo proof --reviewer codex   # 별도 읽기 전용 Codex 검증 패널 실행
 ```
 
-Rondo는 변경 파일을 낮음·중간·높음으로 분류합니다. 인증, 권한, 결제, 마이그레이션, 보안, 배포 경로와 선언한 scope 밖의 변경은 고위험입니다. 문서와 테스트만 바뀌면 낮은 위험으로 취급합니다. Python unittest, npm test/lint, Gradle, Cargo, Go 검증은 프로젝트 파일을 보고 자동으로 찾으며 `--check "명령"`으로 작업별 검증을 추가할 수 있습니다.
+Rondo는 변경 파일을 낮음·중간·높음으로 분류합니다. 인증, 권한, 결제, 마이그레이션, 보안, 배포 경로와 선언한 scope 밖의 변경은 고위험이며 여러 이유가 겹치면 모두 표시합니다. 변경 줄 수에 따라 검토 시간을 계산하고, `__pycache__`, `dist`, `build`, `node_modules`, `.venv`, `target` 같은 생성물은 제외합니다. 변경이 하나도 없으면 승인 후보가 아니라 `변경 없음`으로 표시합니다. Python unittest, npm test/lint, Gradle, Cargo, Go 검증은 프로젝트 파일을 보고 자동으로 찾으며 `--check "명령"`으로 작업별 검증을 추가할 수 있습니다.
 
 독립 reviewer는 기존 구현 대화를 이어받지 않는 새 패널에서 실행됩니다. Codex는 read-only sandbox, Claude는 plan 권한으로 열리고 구현 코드를 수정하지 않은 채 실제 diff와 증거에서 가장 강한 반례를 찾도록 요청받습니다. `ready`는 자동 승인이 아니라 검토 후보라는 뜻이며, 인증·결제·DB 등 고위험 변경은 항상 사람 검토 큐에 남습니다.
 
 작업 의도와 Proof 패킷은 `~/.cache/rondo/proof/`에 권한 `0600`으로 저장되며 Git에 포함되지 않습니다. 검증 출력에는 프로젝트 데이터가 포함될 수 있으므로 패킷을 외부에 공유하기 전에는 내용을 확인하세요.
+
+## Race·스냅샷·복원
+
+```sh
+rondo race "두 가지 구현안을 비교" --agents claude,codex
+rondo race --status                 # 진행 상태
+rondo diff codex                    # 특정 결과 diff
+rondo take codex                    # 선택한 결과 적용
+rondo race --abort                  # 결과 폐기, patch는 보존
+
+rondo snap "리팩터링 전"
+rondo undo --list                   # 스냅샷 ID 확인
+rondo undo a1b2c3d4                 # 해당 ID로 복원, 변경 경로 표시 후 확인
+rondo undo --steps 2 --yes          # 두 단계 전으로 비대화형 복원
+```
+
+`undo`는 커밋 이력을 바꾸지 않고 작업 트리만 복원합니다. 추적하지 않는 파일도 변경 대상에 포함되므로 기본적으로 사전 목록과 `y/N` 확인을 요구하며, 자동화에서만 `--yes`를 명시하세요. 복원 직전 상태도 새 스냅샷으로 보존됩니다.
 
 ## 구현자와 분리된 독립 테스트
 
@@ -301,7 +320,7 @@ rondo continue          # 대기 중인 인계를 기존 Codex 패널로 전달
 
 패킷은 `~/.cache/rondo/relay/` 아래에 권한 `0600`으로 저장됩니다. 흔한 토큰 형식은 마스킹하고, Claude 세션과 사용량 리셋 구간별로 중복 실행을 차단하며, Git에는 커밋하지 않습니다. `ready` 모드에서는 `rondo continue`를 실행하기 전까지 Codex로 아무 내용도 보내지 않습니다.
 
-`auto`는 setup에서 명시적으로 골라야만 켜지며 Codex 패널이 선택되어 있어야 합니다. Rondo가 해당 패널에 인계 요청을 직접 입력하고, 사용자가 Enter를 누른 것처럼 전송합니다. 요청이 가리키는 비공개 패킷에는 현재 의도, Git 상태, 안전 계약이 들어 있습니다.
+`auto`는 setup에서 명시적으로 골라야만 켜지며 Codex 패널이 선택되어 있어야 합니다. Rondo가 해당 패널에 인계 요청을 직접 입력하고, 사용자가 Enter를 누른 것처럼 전송합니다. Codex가 신뢰·승인 화면에서 대기 중이면 자동 전송을 멈추고 모드를 `ready`로 낮춥니다. 요청이 가리키는 비공개 패킷에는 현재 의도, Git 상태, 안전 계약이 들어 있습니다.
 
 ## 지원 에이전트
 
@@ -334,11 +353,17 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo handoff [메모]` | 다른 PC로 옮길 `.rondo/handoff.md` 생성 |
 | `rondo resume [claude\|codex]` | 작업공간을 열고 선택한 에이전트에 인계 전달 |
 | `rondo lens [URL]` | 화면 요소를 클릭하고 확인 후 해당 맥락만 전달 |
+| `rondo race <과제> [옵션]` | 여러 격리 worktree에서 같은 과제 실행 |
+| `rondo diff [agent]` / `rondo take <agent>` | race 결과 비교 / 선택 적용 |
+| `rondo snap [라벨]` | 현재 작업 트리 스냅샷 생성 |
+| `rondo undo [ID\|--steps N] [--yes]` | 대상과 변경 경로를 확인한 뒤 작업 트리 복원 |
+| `rondo kill [세션]` | 현재 프로젝트 또는 지정한 Rondo 세션 종료 |
+| `rondo clean` | 삭제된 저장소의 로컬 캐시 정리 |
 | `rondo language` | 한국어 / English 변경 |
 | `rondo relay [off\|ready\|auto]` | 인계 전략 확인 / 변경 |
 | `rondo continue` | 대기 중인 인계를 기존 Codex 패널로 전달 |
 | `rondo doctor` | zellij·에이전트·설정 점검 |
-| `rondo -l` | 살아 있는 세션 목록 |
+| `rondo -l` | Rondo 세션만 필터링해 목록 표시 |
 | `handoff --init` | macOS/Linux에서 선택적인 Git 핸드오프 로그 활성화 |
 
 zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 탭 이동, `Ctrl+o` 다음 `d`로 디태치합니다.
@@ -383,6 +408,12 @@ sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
 
 GitHub Actions에서 macOS, Linux, Windows의 Python 테스트와 설치 smoke test를 실행합니다.
+
+### 내부 문서
+
+- [어댑터 계층](docs/adapters.md) — 각 CLI가 로컬에 남긴 파일을 읽는 방식
+- [rondo race](docs/race.md) — 같은 과제를 여러 에이전트에게 시키고 하나를 고르는 흐름
+- [실사용 감사 · 2026-08-09](docs/audit-2026-08-09.md) — 0.7.0 전체 명령 실행 결과와 개선 항목
 
 ## 라이선스
 

@@ -65,17 +65,22 @@ def until(epoch):
     return f"{hours}h{mins:02d}m" if hours else f"{mins}m"
 
 
-def render(snapshot):
+def render(snapshot, compact=0):
     """Snapshot -> 한 패널 몫의 문자열. 모든 벤더가 이 함수 하나를 지난다."""
-    bits = [short_model(snapshot.model)] if snapshot.model else []
     windows = snapshot.live_windows()
+    if compact >= 2:
+        return "/".join(f"{window.remaining:.0f}" for window in windows) + "%" if windows else "-"
+    model = short_model(snapshot.model)
+    if compact == 1 and model:
+        model = model.split()[0]
+    bits = [model] if model else []
     for window in windows:
-        bits.append(
+        bits.append(f"{window.label} {window.remaining:.0f}%" if compact else (
             f"{window.label} {battery(window.remaining)} "
             f"{window.remaining:.0f}%({until(window.resets_at)})"
-        )
+        ))
     # 실제 잔량과 어긋나 보일 수 있으니 값이 낡았으면 언제 기준인지 밝힌다
-    if windows and snapshot.age > STALE_LIMITS:
+    if not compact and windows and snapshot.age > STALE_LIMITS:
         bits.append("%dm전" % (snapshot.age // 60))
     return " ".join(bits) or None
 
@@ -122,23 +127,34 @@ def open_panes():
     return set(re.findall(r'name="([a-z-]+)"', out.stdout))
 
 
-def line(root):
+def line(root, width=None):
     panes = open_panes()
-    parts = []
+    snapshots = []
     for name, adapter in AGENTS:
         if panes is not None and name not in panes:
             continue
-        value = render(adapter.snapshot(root)) if adapter else None
+        snapshot = adapter.snapshot(root) if adapter else None
+        value = render(snapshot) if snapshot else None
         if value:
-            LAST[name] = value
+            LAST[name] = snapshot
         else:
-            value = LAST.get(name)
-        parts.append(f"{name} {value or '-'}")
+            snapshot = LAST.get(name)
+        snapshots.append((name, snapshot))
     relay = relay_field(root)
-    if relay:
-        parts.append(f"relay→codex {relay}")
     empty = "패널 없음" if setting("language", "en") == "ko" else "no panes"
-    return "   ".join(parts) or empty
+    short_names = {"claude": "cl", "codex": "cx", "gemini": "gm", "kimi": "km", "grok": "gr"}
+    for compact in (0, 1, 2):
+        parts = [
+            f"{short_names[name] if compact >= 2 else name} "
+            f"{render(snapshot, compact) if snapshot else '-'}"
+            for name, snapshot in snapshots
+        ]
+        if relay:
+            parts.append(f"relay→cx {relay}" if compact >= 2 else f"relay→codex {relay}")
+        text = (" " if compact >= 2 else "   ").join(parts) or empty
+        if width is None or len(text) < width:
+            return text
+    return text[: max(0, (width or 1) - 1)].rstrip()
 
 
 def mute_input(fd):
@@ -161,11 +177,8 @@ def main():
         mute_input(fd)
 
     while True:
-        text = line(root)
-        # 1행 패널이라 폭을 넘으면 줄바꿈돼 깨진다. 잘라낸다.
         width = shutil.get_terminal_size(fallback=(80, 24)).columns
-        if len(text) > width:
-            text = text[: max(0, width - 1)]
+        text = line(root, width)
         # 커서를 좌상단으로 보내고 줄을 지운 뒤 다시 그린다
         sys.stdout.write("\033[H\033[2K" + text)
         sys.stdout.flush()
