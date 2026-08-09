@@ -21,6 +21,8 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 - Rondo Proof를 통한 실행 가능한 증거와 위험 기반 사람 검토 큐
 - 구현 세션과 물리적으로 분리되는 레드팀·블루팀·신뢰성·보안 테스트
 - 사용량 한도에서 동작하는 선택형 Claude → Codex 연속 작업
+- 저장소 상태를 합쳐 다음 행동을 추천하는 Command Center
+- 검증된 버전 업데이트·한 세대 롤백·개인정보 보호형 지원 묶음
 
 별도 서버·계정·API 키가 필요 없는 로컬 우선 도구입니다. 각 CLI가 이미 내 컴퓨터에 저장한 상태만 읽습니다.
 
@@ -29,17 +31,17 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.sh | sh
 ```
 
-필요한 런타임은 Python 3.10 이상뿐입니다. 설치 프로그램이 Rondo와 Zellij를 내려받고 `~/.local/bin`에 명령을 만든 뒤 셸 `PATH`까지 등록합니다.
+필요한 런타임은 Python 3.10 이상뿐입니다. 설치 프로그램은 고정된 Rondo 릴리스와 Zellij 0.44.3을 내려받아 SHA-256을 확인하고, `~/.local/bin`에 명령을 만든 뒤 셸 `PATH`까지 등록합니다.
 
 ### Windows
 
 PowerShell을 열고 다음 한 줄을 실행합니다.
 
 ```powershell
-irm https://raw.githubusercontent.com/ppupy1209/rondo/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.ps1 | iex
 ```
 
 Windows 설치 프로그램이 Rondo와 네이티브 Zellij를 내려받습니다. Python 3.10 이상이 없으면 WinGet으로 Python도 설치합니다. WSL은 필요하지 않습니다. 설치 후 새 터미널을 여세요.
@@ -54,7 +56,7 @@ rondo
 
 최초 실행에만 언어·설명 수준·승인 모드·에이전트·인계 전략을 고르고, 저장 직후 패널로 이동합니다. 다음 실행부터는 같은 저장소의 기존 패널로 바로 들어갑니다. 설정을 바꿀 때만 `rondo setup`을 실행하세요.
 
-이미 clone한 저장소에서 설치하려면 macOS/Linux는 `sh install.sh`, Windows PowerShell은 `.\install.ps1`을 실행합니다. 업데이트하거나 설치를 복구할 때도 같은 명령을 다시 실행하면 됩니다.
+이미 clone한 저장소에서 개발용으로 연결하려면 macOS/Linux는 `sh install.sh`, Windows PowerShell은 `.\install.ps1`을 실행합니다. 이 방식은 소스 파일을 직접 가리키므로 관리형 업데이트·롤백 대상이 아닙니다. 한 줄 설치로 설치한 버전은 `rondo update`와 `rondo rollback`을 사용합니다.
 
 기존 `ai-tools` 설정은 첫 실행 때 자동 이전합니다. 예전 `ai`, `ai-status`, `claude-statusline` 명령도 호환 별칭으로 계속 동작합니다.
 
@@ -64,6 +66,7 @@ rondo
 cd ~/projects/my-project
 rondo             # 밖에서는 작업공간 열기, 열린 shell 탭에서는 작업 메뉴
 rondo menu        # 테스트·검토·기억·설정 메뉴를 명시적으로 열기
+rondo status      # 현재 상태와 다음 권장 작업을 한 번에 확인
 rondo setup       # 저장된 언어·설명·승인·에이전트·인계 설정 변경
 rondo audience    # 모든 에이전트의 결과 설명 수준 변경
 rondo add         # 에이전트를 선택해 패널 추가
@@ -77,6 +80,7 @@ rondo proof       # 검증 실행 후 위험 기반 검토 패킷 생성
 rondo test all --from codex --tester claude  # 구현자와 분리된 독립 테스트
 rondo git         # Git 연결·브랜치·PR 정책·리뷰어 확인
 rondo doctor      # 설치와 설정 진단
+rondo update --check  # 새 검증 릴리스 확인
 ```
 
 처음 `rondo`를 실행하면 setup 선택 화면이 자동으로 열립니다. 방향키로 이동하고, Space로 에이전트를 최대 4개까지 선택하고, Enter로 저장합니다. 이름이나 모드를 직접 입력하지 않으므로 오타가 생기지 않습니다.
@@ -93,6 +97,24 @@ rondo doctor      # 설치와 설정 진단
 ```
 
 기억·예약 제안처럼 사람의 판단이 필요한 항목은 자동 승인되지 않습니다. `shell` 탭에서 `rondo`만 실행하면 작업 메뉴가 열리고, 방향키로 원문을 확인한 뒤 승인하거나 거절할 수 있습니다. 기존 `rondo learn`, `rondo schedule`, `rondo test` 등의 명령은 스크립트와 세부 제어를 위해 그대로 지원합니다.
+
+## Command Center와 제품 수명주기
+
+열린 Rondo의 `shell` 탭에서 `rondo`를 실행하면 저장소 이름·브랜치, 작업 목표, 변경 파일 수, 승인 대기 지식, 예약 작업, 독립 테스트, race, 최신 Proof를 한 화면에 표시합니다. Rondo는 이 상태를 정해진 우선순위로 판단해 지금 할 일 하나를 메뉴 맨 위에 `★`로 올립니다. 승인 대기를 먼저 처리하고, 진행 중인 테스트·race를 잇고, 변경에 목표가 없으면 목표 기록, 목표가 있으면 Proof를 권장합니다. `rondo status`는 같은 정보를 일반 텍스트로 출력합니다.
+
+한 줄 설치로 받은 관리형 버전은 다음 수명주기를 지원합니다.
+
+```sh
+rondo update --check          # 최신 버전만 확인
+rondo update                  # 확인 후 업데이트, 기존 버전은 한 세대 보관
+rondo update --version 0.12.1 # 특정 버전으로 업데이트
+rondo rollback                # 직전 설치와 현재 설치를 교환
+rondo uninstall               # 프로그램만 제거, 설정·캐시는 보존
+rondo uninstall --purge       # 명시적 확인 후 설정·캐시까지 제거
+rondo support-bundle          # 원문 없는 비공개 진단 zip 생성
+```
+
+업데이트·롤백·제거는 사용자 대화형 터미널에서만 실행되고 에이전트 패널·파이프에서는 거부됩니다. 설치 프로그램은 비관리 디렉터리와 심볼릭 링크를 덮어쓰지 않으며, 제거할 때도 Rondo가 만든 launcher와 hook만 지웁니다. 지원 묶음에는 OS·Rondo 버전·기능 상태의 숫자만 허용 목록으로 넣고 대화, 프롬프트, 목표 원문, 코드, 파일명, 경로, Git 원격, 환경변수, 자격증명은 제외합니다. 묶음은 자동 전송되지 않으며 공유 전 `report.json`을 직접 확인해야 합니다.
 
 ```text
 ┌────────────────────────────────────────────────────┐
@@ -198,7 +220,7 @@ rondo schedule              # ID를 입력하지 않고 승인·중지·재개·
 
 ### Hermes와 공유하는 원리, Rondo의 차이
 
-Rondo 0.11은 Hermes Agent의 지속 기억·검색 가능한 세션·예약 작업·격리 위임·점진적 절차라는 아이디어를 코딩 에이전트 오케스트레이션에 맞춰 제공합니다. 공식 Hermes 프로젝트와 제휴하거나 Hermes 런타임을 포함하는 것은 아닙니다.
+Rondo 0.12는 Hermes Agent의 지속 기억·검색 가능한 세션·예약 작업·격리 위임·점진적 절차라는 아이디어를 코딩 에이전트 오케스트레이션에 맞춰 제공합니다. 공식 Hermes 프로젝트와 제휴하거나 Hermes 런타임을 포함하는 것은 아닙니다.
 
 설계 참고: [Hermes 기능 개요](https://hermes-agent.nousresearch.com/docs/user-guide/features/overview/), [Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory/), [Sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions/), [Cron](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/cron.md), [Delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation/), [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security/)
 
@@ -422,6 +444,7 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 |---|---|
 | `rondo` | 밖에서는 프로젝트 세션 열기·붙기, 열린 shell 탭에서는 작업 메뉴 표시 |
 | `rondo menu` | 테스트·검증·코드 리뷰·지식·Git·설정 작업 메뉴 표시 |
+| `rondo status` | 저장소 상태와 다음 권장 작업을 일반 텍스트로 표시 |
 | `rondo setup` | 언어·설명 수준·승인·최대 4개 패널·인계 모드 변경 |
 | `rondo audience [default\|nondev\|guided]` | 모든 에이전트의 결과 설명 수준 변경 |
 | `rondo add [agent]` | 패널 추가, 인자를 생략하면 선택 화면 표시 |
@@ -452,6 +475,10 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo relay [off\|ready\|auto]` | 인계 전략 확인 / 변경 |
 | `rondo continue` | 대기 중인 인계를 기존 Codex 패널로 전달 |
 | `rondo doctor` | zellij·에이전트·설정 점검 |
+| `rondo update [--check\|--version X]` | 검증된 관리형 릴리스 확인·설치 |
+| `rondo rollback` | 직전 관리형 설치로 한 번 되돌리기 |
+| `rondo uninstall [--purge]` | 프로그램 제거, 선택적으로 설정·캐시 제거 |
+| `rondo support-bundle [경로]` | 원문을 제외한 진단 zip 생성 |
 | `rondo -l` | Rondo 세션만 필터링해 목록 표시 |
 | `handoff --init` | macOS/Linux에서 선택적인 Git 핸드오프 로그 활성화 |
 
@@ -496,15 +523,18 @@ zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 �
 python3 -m unittest discover -s tests -v
 python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
+python3 tests/zellij_smoke.py  # 실제 화면 전달·강제 재시작, macOS/Linux
 ```
 
-GitHub Actions에서 macOS, Linux, Windows의 Python 테스트와 설치 smoke test를 실행합니다.
+GitHub Actions에서 macOS, Linux, Windows의 Python 테스트와 설치 smoke test를 실행하고, macOS·Linux에서는 실제 Zellij 화면 전달과 강제 재시작까지 검증합니다. `v*` 태그는 CLI 버전과 일치할 때만 macOS/Linux용 tar.gz, Windows용 zip, SHA-256 목록을 GitHub Release로 게시합니다.
 
 ### 내부 문서
 
 - [어댑터 계층](docs/adapters.md) — 각 CLI가 로컬에 남긴 파일을 읽는 방식
 - [rondo race](docs/race.md) — 같은 과제를 여러 에이전트에게 시키고 하나를 고르는 흐름
 - [실사용 감사 · 2026-08-09](docs/audit-2026-08-09.md) — 0.7.0 전체 명령 실행 결과와 개선 항목
+- [0.12 외부 베타](docs/beta.md) — 텔레메트리 없는 실제 사용자 검증 기준
+- [보안 정책](SECURITY.md) · [변경 이력](CHANGELOG.md) · [기여 방법](CONTRIBUTING.md)
 
 ## 라이선스
 

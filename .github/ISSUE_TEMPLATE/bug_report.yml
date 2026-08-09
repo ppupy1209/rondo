@@ -1,0 +1,40 @@
+name: Bug report
+description: 재현 가능한 Rondo 동작 오류를 제보합니다
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "보안 취약점과 비밀값은 공개 issue가 아니라 SECURITY.md의 비공개 경로로 제보해 주세요."
+  - type: input
+    id: version
+    attributes:
+      label: Rondo version
+      placeholder: "rondo 0.12.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Linux, Windows]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: 비밀값, 대화 원문, 실제 소스는 제거해 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Sanitized support bundle
+      description: 선택 사항. `rondo support-bundle`의 report.json을 검토한 뒤 첨부하세요.

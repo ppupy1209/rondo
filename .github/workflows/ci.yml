@@ -24,6 +24,10 @@ jobs:
           sh -n install.sh bin/ai bin/rondo-status bin/claude-statusline bin/*-session bin/handoff
           RONDO_HOME="$RUNNER_TEMP/rondo-home" sh install.sh
           RONDO_HOME="$RUNNER_TEMP/rondo-home" sh install.sh
+      - name: Real Zellij delivery and restart
+        run: |
+          export PATH="$RUNNER_TEMP/rondo-home/.local/bin:$PATH"
+          python3 tests/zellij_smoke.py
 
   windows:
     runs-on: windows-latest

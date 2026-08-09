@@ -21,6 +21,8 @@ It provides:
 - executable evidence and a risk-based human review queue through Rondo Proof;
 - red-team, blue-team, reliability, and security tests physically separated from implementation sessions;
 - opt-in Claude → Codex continuity at the usage limit.
+- a Command Center that combines repository state into one recommended next action;
+- verified version updates, one-generation rollback, and privacy-safe support bundles.
 
 Rondo is local-first. It reads the files that each installed CLI already stores on your machine and does not add a hosted service, account, or API key.
 
@@ -29,17 +31,17 @@ Rondo is local-first. It reads the files that each installed CLI already stores 
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.sh | sh
 ```
 
-Python 3.10+ is the only runtime requirement. The installer downloads Rondo and Zellij, creates the commands in `~/.local/bin`, and adds that directory to your shell `PATH`.
+Python 3.10+ is the only runtime requirement. The installer downloads a fixed Rondo release and Zellij 0.44.3, verifies SHA-256, creates the commands in `~/.local/bin`, and adds that directory to your shell `PATH`.
 
 ### Windows
 
 Open PowerShell and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/ppupy1209/rondo/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.0/install.ps1 | iex
 ```
 
 The Windows installer downloads Rondo and native Zellij. If Python 3.10+ is missing, it installs Python through WinGet. WSL is not required. Open a new terminal after installation.
@@ -54,7 +56,7 @@ rondo
 
 Only the first run asks for language, explanation level, approval mode, agents, and relay behavior, then opens the panes immediately. Later runs attach directly to the same repository workspace. Run `rondo setup` only when you want to change the saved choices.
 
-To install from an existing clone instead, run `sh install.sh` on macOS/Linux or `.\install.ps1` in PowerShell. Rerun the same installer to update or repair an installation.
+To link an existing clone for development, run `sh install.sh` on macOS/Linux or `.\install.ps1` in PowerShell. That mode points directly at source files and is intentionally outside the managed update/rollback lifecycle. Use `rondo update` and `rondo rollback` for a version installed by the one-line command.
 
 Existing `ai-tools` installations are migrated on first run. The old `ai`, `ai-status`, and `claude-statusline` commands remain compatibility aliases.
 
@@ -64,6 +66,7 @@ Existing `ai-tools` installations are migrated on first run. The old `ai`, `ai-s
 cd ~/projects/my-project
 rondo             # open outside; show actions from the workspace shell tab
 rondo menu        # explicitly open the test, review, knowledge, and settings menu
+rondo status      # show current state and one recommended next action
 rondo setup       # change saved language, explanation, approval, agents, and relay
 rondo audience    # change how every agent explains its results
 rondo add         # select and add another agent pane
@@ -77,6 +80,7 @@ rondo proof       # run checks and build a risk-based review packet
 rondo test all --from codex --tester claude  # test outside the implementation session
 rondo git         # inspect Git connection, branch, PR policy, and reviewers
 rondo doctor      # diagnose dependencies and configuration
+rondo update --check  # check for a verified release
 ```
 
 The first `rondo` launch opens setup automatically. Move with arrow keys, select up to four agents with Space, and save with Enter. Names and modes never need to be typed.
@@ -93,6 +97,24 @@ Find our earlier authentication work
 ```
 
 Human decisions such as approving memory or scheduled-work proposals are never automated. Run bare `rondo` from the `shell` tab, select the item with the arrow keys, inspect the original text, then approve or reject it. Existing commands such as `rondo learn`, `rondo schedule`, and `rondo test` remain available for scripts and precise control.
+
+## Command Center and product lifecycle
+
+Run `rondo` from the workspace `shell` tab to see repository and branch, work goal, changed files, pending knowledge, scheduled work, independent tests, race, and latest Proof in one view. Rondo applies a deterministic priority and puts one action at the top with `★`: human approvals first, then active tests or races, missing intent, and verification. `rondo status` prints the same state without the interactive menu.
+
+A managed one-line installation supports this lifecycle:
+
+```sh
+rondo update --check          # check only
+rondo update                  # confirm and update; retain one previous release
+rondo update --version 0.12.1 # install a specific newer release
+rondo rollback                # exchange current and previous installations
+rondo uninstall               # remove the program, keep settings and cache
+rondo uninstall --purge       # explicitly remove settings and cache too
+rondo support-bundle          # create a private diagnostic zip without raw content
+```
+
+Updates, rollbacks, and removal require an interactive user terminal and are rejected from agent panes and pipes. The installer refuses unmanaged directories and symbolic links; uninstall removes only Rondo-owned launchers and hooks. Support bundles use a metadata allowlist and exclude conversations, prompts, goal text, source, file names, local paths, Git remotes, environment variables, and credentials. Nothing is uploaded automatically; inspect `report.json` before sharing.
 
 ```text
 ┌────────────────────────────────────────────────────┐
@@ -198,7 +220,7 @@ An agent calling `schedule add` can only create a proposal. Only the user in Ron
 
 ### Shared Hermes principles and Rondo differences
 
-Rondo 0.11 applies ideas found in Hermes Agent—durable memory, searchable sessions, scheduled work, isolated delegation, and progressively loaded procedures—to coding-agent orchestration. It is not affiliated with the official Hermes project and does not bundle the Hermes runtime.
+Rondo 0.12 applies ideas found in Hermes Agent—durable memory, searchable sessions, scheduled work, isolated delegation, and progressively loaded procedures—to coding-agent orchestration. It is not affiliated with the official Hermes project and does not bundle the Hermes runtime.
 
 Design references: [Hermes feature overview](https://hermes-agent.nousresearch.com/docs/user-guide/features/overview/), [Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory/), [Sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions/), [Cron](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/cron.md), [Delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation/), and [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security/)
 
@@ -422,6 +444,7 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 |---|---|
 | `rondo` | Open or attach outside; show the action menu from an open shell tab |
 | `rondo menu` | Show test, verification, code-review, knowledge, Git, and settings actions |
+| `rondo status` | Print repository state and the recommended next action |
 | `rondo setup` | Change language, explanation, approval, up to four panes, and relay |
 | `rondo audience [default\|nondev\|guided]` | Change how every agent explains its results |
 | `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
@@ -452,6 +475,10 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo relay [off\|ready\|auto]` | Inspect or change the continuity strategy |
 | `rondo continue` | Send the pending handoff to the existing Codex pane |
 | `rondo doctor` | Check zellij, agents, and configuration |
+| `rondo update [--check\|--version X]` | Check or install a verified managed release |
+| `rondo rollback` | Restore the previous managed installation once |
+| `rondo uninstall [--purge]` | Remove the program and optionally settings/cache |
+| `rondo support-bundle [path]` | Create a diagnostic zip without raw content |
 | `rondo -l` | List only Rondo-managed sessions |
 | `handoff --init` | Enable the optional Git handoff log on macOS/Linux |
 
@@ -496,15 +523,18 @@ No telemetry is included. Rondo does not store credentials or ingest raw agent t
 python3 -m unittest discover -s tests -v
 python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
+python3 tests/zellij_smoke.py  # real visible delivery and forced restart on macOS/Linux
 ```
 
-GitHub Actions runs the Python suite and installer smoke tests on macOS, Linux, and Windows.
+GitHub Actions runs the Python suite and installer smoke tests on macOS, Linux, and Windows, plus real Zellij delivery and forced restart on macOS/Linux. A `v*` tag publishes macOS/Linux tar.gz, Windows zip, and SHA-256 assets only when the tag matches the CLI version.
 
 ### Internal notes
 
 - [Adapter layer](docs/adapters.md) — how Rondo reads what each CLI leaves on disk
 - [rondo race](docs/race.md) — one task, several agents, one human pick
 - [Hands-on audit · 2026-08-09](docs/audit-2026-08-09.md) — every command exercised on 0.7.0, with findings (Korean)
+- [0.12 external beta](docs/beta.md) — opt-in validation without telemetry (Korean)
+- [Security policy](SECURITY.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ## License
 

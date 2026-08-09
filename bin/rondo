@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import time
 import sys
+import unicodedata
 import uuid
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -74,6 +75,7 @@ TEXT = {
   rondo                 이 프로젝트의 세션 열기 / 붙기
                         이미 열린 shell 탭에서는 작업 메뉴 표시
   rondo menu            테스트·검토·기억·설정 작업 메뉴
+  rondo status          저장소 상태와 다음 권장 작업 표시
   rondo setup           언어·패널·승인·자동 인계 설정 변경
   rondo audience [단계] 설명 수준 선택 (default|nondev|guided)
   rondo add [에이전트]   현재 세션에 패널 추가
@@ -124,6 +126,13 @@ TEXT = {
   rondo relay [모드]    Claude → Codex 인계 상태 / 모드 변경
   rondo continue        준비된 인계를 Codex에서 계속
   rondo doctor [--deep] 설치·설정 진단 (--deep 은 벤더 데이터까지)
+  rondo update [--check|--version X] [--yes]
+                        검증된 릴리스 확인·업데이트
+  rondo rollback [--yes] 직전 설치 버전으로 되돌리기
+  rondo uninstall [--purge] [--yes]
+                        Rondo 제거 (기본은 설정·캐시 보존)
+  rondo support-bundle [경로]
+                        원문을 제외한 진단 묶음 만들기
   rondo -l              열려 있는 세션 목록
 
 세션 안에서
@@ -215,7 +224,11 @@ TEXT = {
         "select_auto_no_codex": "자동 인계에는 선택된 Codex 패널과 CLI가 필요합니다.",
         "send_usage": "사용법: rondo send <claude|codex|gemini|kimi|grok> <메시지>",
         "home_title": "Rondo 작업 메뉴",
+        "home_goal": "현재 작업 목표 기록",
         "home_test": "독립 테스트 시작",
+        "home_test_status": "진행 중인 독립 테스트 확인",
+        "home_test_finish": "완료된 독립 테스트 결과 합치기",
+        "home_race_status": "진행 중인 race 확인",
         "home_proof": "변경분 검증 증거 만들기",
         "home_code_review": "독립 코드 리뷰 시작",
         "home_knowledge": "프로젝트 지식 검토·삭제",
@@ -225,7 +238,44 @@ TEXT = {
         "home_git": "Git·PR 정책 확인",
         "home_setup": "Rondo 설정 변경",
         "home_exit": "메뉴 닫기",
+        "home_goal_prompt": "이번 작업의 목표를 한 줄로 입력하세요: ",
         "home_recall_prompt": "찾을 내용을 입력하세요: ",
+        "center_repo": "{repo} · {branch}",
+        "center_work": "목표: {goal} · 변경 {changed}개",
+        "center_queue": "승인 대기 {approvals}개 · 예약 대기 {jobs}개 · 실행 예약 {active}개",
+        "center_test": "테스트 {complete}/{total}",
+        "center_race": "race {agents}개 에이전트",
+        "center_proof": "Proof {verdict} · {files}개 파일",
+        "center_next": "다음 권장: {action}",
+        "center_no_goal": "기록 안 됨",
+        "center_none": "없음",
+        "status_title": "Rondo Command Center",
+        "lifecycle_human": "업데이트·롤백·제거는 사용자가 직접 실행해야 합니다.",
+        "update_usage": "사용법: rondo update [--check|--version X] [--yes]",
+        "update_current": "현재 Rondo {current} · 최신 {latest}",
+        "update_available": "업데이트 가능: {current} → {latest}",
+        "update_confirm": "Rondo를 {current}에서 {target}(으)로 업데이트할까요? [y/N] ",
+        "update_done": "Rondo {version} 업데이트 완료 · `rondo rollback`으로 한 번 되돌릴 수 있습니다.",
+        "rollback_confirm": "현재 버전을 직전 설치로 바꿀까요? [y/N] ",
+        "rollback_done": "Rondo {current} → {restored} 롤백 완료 · 다시 실행하세요.",
+        "uninstall_confirm": "Rondo 프로그램을 제거할까요? 설정과 캐시는 보존됩니다. [y/N] ",
+        "uninstall_purge_confirm": "Rondo 프로그램과 모든 설정·로컬 캐시를 제거할까요? [y/N] ",
+        "uninstall_done": "Rondo {version} 제거 완료{data}.",
+        "uninstall_kept": " · 설정과 캐시는 보존됨",
+        "uninstall_purged": " · 설정과 캐시도 제거됨",
+        "release_errors": {
+            "unmanaged": "버전 설치가 아닌 소스 체크아웃입니다. 공식 한 줄 설치 명령으로 설치한 Rondo에서 사용하세요",
+            "state_unsafe": "설치 상태가 손상되었거나 링크로 바뀌어 작업을 중단했습니다",
+            "invalid_version": "버전은 0.12.0 형식이어야 합니다",
+            "network": "GitHub 릴리스 정보를 가져오지 못했습니다",
+            "invalid_release": "GitHub 최신 릴리스 정보가 올바르지 않습니다",
+            "use_rollback": "이전 버전은 `rondo rollback`으로만 복원할 수 있습니다",
+            "install_failed": "검증된 릴리스를 설치하지 못했습니다",
+            "rollback_failed": "롤백을 완료하지 못해 기존 설치를 복구했습니다",
+            "no_previous": "되돌릴 직전 설치가 없습니다"
+        },
+        "support_saved": "지원 묶음을 만들었습니다: {path}\n공유하기 전에 report.json을 직접 확인하세요.",
+        "support_unsafe": "기존 파일이나 링크를 덮어쓰지 않았습니다. 다른 출력 경로를 지정하세요.",
         "learn_decision_title": "이 제안을 어떻게 처리할까요?",
         "learn_menu_title": "프로젝트 지식을 선택하세요",
         "learn_pending_state": "승인 대기",
@@ -403,6 +453,7 @@ TEXT = {
   rondo                 Open or attach to this project's session
                         Show the action menu from an open shell tab
   rondo menu            Open the test, review, knowledge, and settings menu
+  rondo status          Show repository state and the recommended next action
   rondo audience [mode] Choose explanation level (default|nondev|guided)
   rondo add [agent]     Add a pane to the current session
   rondo send <agent> <message>
@@ -452,6 +503,14 @@ TEXT = {
   rondo relay [mode]    Show or change Claude → Codex relay mode
   rondo continue        Continue a prepared relay in Codex
   rondo doctor [--deep] Diagnose install and config (--deep probes vendor data)
+  rondo update [--check|--version X] [--yes]
+                        Check or install a verified release
+  rondo rollback [--yes]
+                        Restore the previously installed release
+  rondo uninstall [--purge] [--yes]
+                        Remove Rondo (keeps settings and cache by default)
+  rondo support-bundle [path]
+                        Create a diagnostic bundle without raw content
   rondo -l              List running sessions
 
 Inside a session
@@ -543,7 +602,11 @@ Inside a session
         "select_auto_no_codex": "Automatic relay requires a selected Codex pane and CLI.",
         "send_usage": "Usage: rondo send <claude|codex|gemini|kimi|grok> <message>",
         "home_title": "Rondo actions",
+        "home_goal": "Record the current work goal",
         "home_test": "Start independent tests",
+        "home_test_status": "Inspect the active independent tests",
+        "home_test_finish": "Finish and collect the independent tests",
+        "home_race_status": "Inspect the active race",
         "home_proof": "Build verification evidence",
         "home_code_review": "Start independent code review",
         "home_knowledge": "Review or remove project knowledge",
@@ -553,7 +616,44 @@ Inside a session
         "home_git": "Inspect Git and PR policy",
         "home_setup": "Change Rondo settings",
         "home_exit": "Close menu",
+        "home_goal_prompt": "Describe this work's goal in one line: ",
         "home_recall_prompt": "What do you want to find? ",
+        "center_repo": "{repo} · {branch}",
+        "center_work": "Goal: {goal} · {changed} changed",
+        "center_queue": "{approvals} approvals · {jobs} scheduled approvals · {active} active jobs",
+        "center_test": "Tests {complete}/{total}",
+        "center_race": "Race with {agents} agents",
+        "center_proof": "Proof {verdict} · {files} files",
+        "center_next": "Recommended next: {action}",
+        "center_no_goal": "not recorded",
+        "center_none": "none",
+        "status_title": "Rondo Command Center",
+        "lifecycle_human": "Updates, rollbacks, and removal must be run directly by the user.",
+        "update_usage": "Usage: rondo update [--check|--version X] [--yes]",
+        "update_current": "Current Rondo {current} · latest {latest}",
+        "update_available": "Update available: {current} → {latest}",
+        "update_confirm": "Update Rondo from {current} to {target}? [y/N] ",
+        "update_done": "Rondo {version} installed · one `rondo rollback` is available.",
+        "rollback_confirm": "Replace the current release with the previous installation? [y/N] ",
+        "rollback_done": "Rondo {current} → {restored} rolled back · run it again.",
+        "uninstall_confirm": "Remove the Rondo program? Settings and cache will be kept. [y/N] ",
+        "uninstall_purge_confirm": "Remove Rondo and all of its settings and local cache? [y/N] ",
+        "uninstall_done": "Rondo {version} removed{data}.",
+        "uninstall_kept": " · settings and cache kept",
+        "uninstall_purged": " · settings and cache removed",
+        "release_errors": {
+            "unmanaged": "this is a source checkout, not a versioned installation; use this command from a Rondo installed by the official one-line installer",
+            "state_unsafe": "the installation is corrupt or linked, so Rondo stopped safely",
+            "invalid_version": "use a version in the form 0.12.0",
+            "network": "GitHub release information could not be fetched",
+            "invalid_release": "GitHub returned invalid latest-release information",
+            "use_rollback": "older releases can only be restored with `rondo rollback`",
+            "install_failed": "the verified release could not be installed",
+            "rollback_failed": "rollback failed and Rondo attempted to restore the current release",
+            "no_previous": "there is no previous installation to restore"
+        },
+        "support_saved": "Created support bundle: {path}\nReview report.json yourself before sharing it.",
+        "support_unsafe": "Rondo did not overwrite an existing file or link. Choose another output path.",
         "learn_decision_title": "What should happen to this proposal?",
         "learn_menu_title": "Choose project knowledge",
         "learn_pending_state": "pending",
@@ -3083,26 +3183,132 @@ def undo_command(args: list[str]) -> int:
     return 0
 
 
-def home_command() -> int:
-    if os.environ.get("RONDO_AGENT"):
-        raise RuntimeError(t("learn_human_only"))
-    action = choose_one(
-        t("home_title"),
-        [
-            ("test", t("home_test")),
-            ("proof", t("home_proof")),
-            ("code-review", t("home_code_review")),
-            ("knowledge", t("home_knowledge")),
-            ("recall", t("home_recall")),
-            ("history", t("home_history")),
-            ("schedule", t("home_schedule")),
-            ("git", t("home_git")),
-            ("setup", t("home_setup")),
-            ("exit", t("home_exit")),
-        ],
+def _display_text(value: object, limit: int = 160) -> str:
+    text = "".join(
+        character
+        for character in str(value)
+        if not unicodedata.category(character).startswith("C")
     )
+    return " ".join(text.split())[:limit]
+
+
+def command_center_state() -> dict:
+    from rondo import command_center
+    from rondo import journal as journal_lib
+    from rondo import knowledge as knowledge_lib
+    from rondo import proof as proof_lib
+    from rondo import race as race_lib
+    from rondo import testing as testing_lib
+
+    root = repo_root()
+    for library in (journal_lib, knowledge_lib, proof_lib, race_lib, testing_lib):
+        library.CACHE = CACHE_DIR
+    task = proof_lib.load_task(root)
+    try:
+        pending = len(knowledge_lib.load(root).get("pending") or [])
+    except knowledge_lib.KnowledgeError as error:
+        raise _knowledge_failure(error) from None
+    try:
+        jobs = journal_lib.job_counts(root)
+    except journal_lib.JournalError as error:
+        raise _journal_failure(error) from None
+    test_run = testing_lib.load(root)
+    test_state = None
+    if test_run:
+        complete = sum(
+            testing_lib.report_complete(role.get("report", ""))
+            for role in test_run.roles.values()
+        )
+        test_state = {
+            "id": test_run.run_id,
+            "complete": complete,
+            "total": len(test_run.roles),
+        }
+    active_race = race_lib.load(root)
+    race_state = (
+        {"id": active_race.run_id, "agents": len(active_race.agents)}
+        if active_race else None
+    )
+    latest = proof_lib.latest(root).get("summary") or {}
+    return command_center.build(
+        repository=_display_text(root.name, 80),
+        branch=_display_text(git_output(root, "branch", "--show-current") or "(detached)", 80),
+        goal=_display_text(task.get("goal", "")),
+        changed=len(proof_lib.changed_files(root)),
+        knowledge_pending=pending,
+        jobs=jobs,
+        test_run=test_state,
+        race=race_state,
+        proof={"verdict": latest.get("verdict", ""), "files": latest.get("files", 0)},
+    )
+
+
+def _center_action_label(action: str) -> str:
+    return {
+        "goal": t("home_goal"),
+        "test": t("home_test"),
+        "test-status": t("home_test_status"),
+        "test-finish": t("home_test_finish"),
+        "race-status": t("home_race_status"),
+        "proof": t("home_proof"),
+        "knowledge": t("home_knowledge"),
+        "schedule": t("home_schedule"),
+    }[action]
+
+
+def command_center_lines(state: dict) -> list[str]:
+    lines = [
+        t("center_repo", repo=state["repository"], branch=state["branch"]),
+        t(
+            "center_work",
+            goal=state["goal"] or t("center_no_goal"),
+            changed=state["changed"],
+        ),
+        t(
+            "center_queue",
+            approvals=state["knowledge_pending"],
+            jobs=state["jobs_pending"],
+            active=state["jobs_active"],
+        ),
+    ]
+    if state["test"]["id"]:
+        lines.append(t(
+            "center_test",
+            complete=state["test"]["complete"],
+            total=state["test"]["total"],
+        ))
+    if state["race"]["id"]:
+        lines.append(t("center_race", agents=state["race"]["agents"]))
+    if state["proof"]["verdict"]:
+        lines.append(t(
+            "center_proof",
+            verdict=state["proof"]["verdict"],
+            files=state["proof"]["files"],
+        ))
+    lines.append(t("center_next", action=_center_action_label(state["next"])))
+    return lines
+
+
+def status_command() -> int:
+    state = command_center_state()
+    print(t("status_title"))
+    for line in command_center_lines(state):
+        print("  " + line)
+    return 0
+
+
+def _run_home_action(action: str) -> int:
+    if action == "goal":
+        goal = input(t("home_goal_prompt")).strip()
+        return task_command([goal]) if goal else 0
     if action == "test":
         return test_command([])
+    if action == "test-status":
+        return test_command(["status"])
+    if action == "test-finish":
+        return test_command(["finish"])
+    if action == "race-status":
+        return race_command(["--status"])
     if action == "proof":
         return proof_command([])
     if action == "code-review":
@@ -3121,6 +3327,168 @@ def home_command() -> int:
         return git_command([])
     if action == "setup":
         setup()
+    return 0
+
+
+def home_command() -> int:
+    if os.environ.get("RONDO_AGENT"):
+        raise RuntimeError(t("learn_human_only"))
+    state = command_center_state()
+    standard = [
+        ("goal", t("home_goal")),
+        ("test", t("home_test")),
+        ("proof", t("home_proof")),
+        ("code-review", t("home_code_review")),
+        ("knowledge", t("home_knowledge")),
+        ("recall", t("home_recall")),
+        ("history", t("home_history")),
+        ("schedule", t("home_schedule")),
+        ("git", t("home_git")),
+        ("setup", t("home_setup")),
+        ("exit", t("home_exit")),
+    ]
+    recommended = state["next"]
+    recommendation = (recommended, "★ " + _center_action_label(recommended))
+    options = [recommendation, *(item for item in standard if item[0] != recommended)]
+    action = choose_one(
+        t("home_title") + "\n" + "\n".join(command_center_lines(state)),
+        options,
+    )
+    return _run_home_action(action)
+
+
+def _release_failure(error) -> RuntimeError:
+    reasons = TEXT[LANGUAGE]["release_errors"]
+    reason = reasons.get(getattr(error, "code", ""), str(error))
+    return RuntimeError(reason)
+
+
+def _lifecycle_confirm(prompt: str, yes: bool) -> bool:
+    _knowledge_require_user_terminal()
+    return yes or input(prompt).strip().casefold() in {"y", "yes"}
+
+
+def update_command(args: list[str]) -> int:
+    from rondo import release as release_lib
+
+    try:
+        bare, values, switches = _command_options(
+            args, {"--version"}, {"--check", "--yes"}
+        )
+        if bare or len(values["--version"]) > 1:
+            raise ValueError
+        if "--check" in switches and (values["--version"] or "--yes" in switches):
+            raise ValueError
+    except ValueError:
+        raise RuntimeError(t("update_usage")) from None
+    root = release_lib.installation_root(__file__)
+    try:
+        current = release_lib.metadata(root)["version"]
+        target = (
+            release_lib.normalize_version(values["--version"][0])
+            if values["--version"] else release_lib.latest_version()
+        )
+    except release_lib.ReleaseError as error:
+        raise _release_failure(error) from None
+    if release_lib.version_tuple(target) <= release_lib.version_tuple(current):
+        print(t("update_current", current=current, latest=target))
+        return 0
+    print(t("update_available", current=current, latest=target))
+    if "--check" in switches:
+        return 0
+    if not _lifecycle_confirm(
+        t("update_confirm", current=current, target=target), "--yes" in switches
+    ):
+        print(t("race_cancelled"))
+        return 0
+    try:
+        installed = release_lib.update(root, target)
+    except release_lib.ReleaseError as error:
+        raise _release_failure(error) from None
+    print(t("update_done", version=installed))
+    return 0
+
+
+def rollback_command(args: list[str]) -> int:
+    from rondo import release as release_lib
+
+    if any(value != "--yes" for value in args) or args.count("--yes") > 1:
+        raise RuntimeError("Usage: rondo rollback [--yes]")
+    if not _lifecycle_confirm(t("rollback_confirm"), "--yes" in args):
+        print(t("race_cancelled"))
+        return 0
+    try:
+        current, restored = release_lib.rollback(release_lib.installation_root(__file__))
+    except release_lib.ReleaseError as error:
+        raise _release_failure(error) from None
+    print(t("rollback_done", current=current, restored=restored))
+    return 0
+
+
+def uninstall_command(args: list[str]) -> int:
+    from rondo import release as release_lib
+
+    if any(value not in {"--purge", "--yes"} for value in args):
+        raise RuntimeError("Usage: rondo uninstall [--purge] [--yes]")
+    if any(args.count(value) > 1 for value in {"--purge", "--yes"}):
+        raise RuntimeError("Usage: rondo uninstall [--purge] [--yes]")
+    purge = "--purge" in args
+    prompt = t("uninstall_purge_confirm" if purge else "uninstall_confirm")
+    if not _lifecycle_confirm(prompt, "--yes" in args):
+        print(t("race_cancelled"))
+        return 0
+    root = release_lib.installation_root(__file__)
+    user_home = Path(os.environ.get("RONDO_HOME") or Path.home())
+    binary = root.parent / "bin" if WINDOWS else user_home / ".local" / "bin"
+    settings = [
+        user_home / ".claude" / "settings.json",
+        user_home / ".gemini" / "settings.json",
+    ]
+    try:
+        result = release_lib.uninstall(
+            root, binary, settings, CONFIG_DIR, CACHE_DIR, purge=purge
+        )
+    except release_lib.ReleaseError as error:
+        raise _release_failure(error) from None
+    data = t("uninstall_purged" if purge else "uninstall_kept")
+    print(t("uninstall_done", version=result["version"], data=data))
+    return 0
+
+
+def support_bundle_command(args: list[str]) -> int:
+    from rondo import release as release_lib
+    from rondo import support as support_lib
+
+    if len(args) > 1:
+        raise RuntimeError("Usage: rondo support-bundle [path]")
+    state = command_center_state()
+    root = repo_root()
+    installation_root = release_lib.installation_root(__file__)
+    try:
+        release_info = release_lib.metadata(installation_root)
+        installation = {"managed": True, "version": release_info["version"]}
+    except release_lib.ReleaseError:
+        installation = {"managed": False, "version": VERSION}
+    value = support_lib.report(
+        version=VERSION,
+        root=root,
+        branch=state["branch"],
+        config={name: read_setting(name) for name in (
+            "language", "audience", "approval", "panels", "relay"
+        )},
+        agents={name: installed(name) for name in AGENTS},
+        state=state,
+        installation=installation,
+    )
+    destination = (
+        Path(args[0]).expanduser()
+        if args else Path.cwd() / time.strftime("rondo-support-%Y%m%d-%H%M%S.zip")
+    )
+    try:
+        target = support_lib.create(destination, value)
+    except support_lib.SupportError:
+        raise RuntimeError(t("support_unsafe")) from None
+    print(t("support_saved", path=target))
     return 0
 
 
@@ -3144,6 +3512,10 @@ def main() -> int:
         clean_cache()
     elif command == "menu":
         return home_command()
+    elif command == "status":
+        if len(args) != 1:
+            raise RuntimeError("Usage: rondo status")
+        return status_command()
     elif command == "setup":
         setup()
     elif command == "add":
@@ -3202,12 +3574,20 @@ def main() -> int:
         if args[1:] not in ([], ["--deep"]):
             raise RuntimeError("Usage: rondo doctor [--deep]")
         return doctor("--deep" in args)
+    elif command == "update":
+        return update_command(args[1:])
+    elif command == "rollback":
+        return rollback_command(args[1:])
+    elif command == "uninstall":
+        return uninstall_command(args[1:])
+    elif command == "support-bundle":
+        return support_bundle_command(args[1:])
     elif command:
         known = [
-            "menu", "setup", "add", "send", "handoff", "resume", "task", "learn", "recall", "note", "history", "schedule", "proof", "review",
+            "menu", "status", "setup", "add", "send", "handoff", "resume", "task", "learn", "recall", "note", "history", "schedule", "proof", "review",
             "git", "code-review", "test", "pr", "lens", "race", "diff", "take",
             "snap", "undo", "language", "audience", "relay", "continue", "doctor",
-            "kill", "clean",
+            "update", "rollback", "uninstall", "support-bundle", "kill", "clean",
         ]
         suggestion = difflib.get_close_matches(command, known, n=1)
         message = t("unknown_command", name=command)

@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param()
+param(
+    [ValidatePattern('^v?\d+\.\d+\.\d+$')]
+    [string]$Version = "",
+    [switch]$ForceRemote
+)
 
 $ErrorActionPreference = "Stop"
 if ($env:OS -ne "Windows_NT") {
@@ -8,7 +12,40 @@ if ($env:OS -ne "Windows_NT") {
 
 $RondoRoot = Join-Path $env:LOCALAPPDATA "Rondo"
 $Bin = Join-Path $RondoRoot "bin"
+$ZellijVersion = "0.44.3"
 New-Item -ItemType Directory -Force -Path $Bin | Out-Null
+
+function Test-ReparsePoint([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    return [bool]((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)
+}
+
+function Get-ManagedVersion([string]$Path) {
+    if (Test-ReparsePoint $Path) { throw "Refusing a linked Rondo installation: $Path" }
+    $marker = Join-Path $Path ".rondo-release.json"
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or (Test-ReparsePoint $marker)) {
+        throw "Refusing to replace an unmanaged Rondo directory: $Path"
+    }
+    try { $value = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json } catch {
+        throw "Invalid Rondo release marker: $Path"
+    }
+    if ($value.schema -ne 1 -or [string]$value.version -notmatch '^\d+\.\d+\.\d+$') {
+        throw "Invalid Rondo release marker: $Path"
+    }
+    return [string]$value.version
+}
+
+function Confirm-Checksum([string]$Checksums, [string]$Artifact, [string]$Name) {
+    $entries = @()
+    foreach ($line in Get-Content -LiteralPath $Checksums) {
+        if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$' -and $Matches[2] -eq $Name) {
+            $entries += $Matches[1].ToLowerInvariant()
+        }
+    }
+    if ($entries.Count -ne 1) { throw "Checksum entry is missing or ambiguous: $Name" }
+    $actual = (Get-FileHash -LiteralPath $Artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $entries[0]) { throw "Checksum mismatch: $Name" }
+}
 
 function Refresh-Path {
     $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -44,44 +81,108 @@ if (-not $Python) {
     if (-not $Python) { throw "Python was installed but is not available yet. Open a new PowerShell window and run the installer again." }
 }
 
-$LocalRepo = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "bin\rondo"))) { $PSScriptRoot } else { $null }
+$LocalRepo = if (-not $ForceRemote -and $PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "bin\rondo"))) { $PSScriptRoot } else { $null }
 if ($LocalRepo) {
     $Repo = $LocalRepo
 } else {
     $Repo = Join-Path $RondoRoot "app"
-    $Temp = Join-Path $env:TEMP "rondo-install-$PID"
-    $Archive = "$Temp.zip"
-    Remove-Item -Recurse -Force $Temp, $Archive -ErrorAction SilentlyContinue
-    Write-Host "Downloading Rondo..."
-    Invoke-WebRequest "https://github.com/ppupy1209/rondo/archive/refs/heads/main.zip" -OutFile $Archive
-    Expand-Archive $Archive -DestinationPath $Temp -Force
-    $Source = Get-ChildItem $Temp -Directory | Select-Object -First 1
-    if (-not $Source) { throw "Downloaded Rondo archive is invalid." }
-    Remove-Item -Recurse -Force $Repo -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path (Split-Path $Repo) | Out-Null
-    Move-Item $Source.FullName $Repo
-    Remove-Item -Recurse -Force $Temp, $Archive -ErrorAction SilentlyContinue
+    $Requested = $Version.TrimStart('v')
+    $ReleaseUrl = if ($Requested) {
+        "https://github.com/ppupy1209/rondo/releases/download/v$Requested"
+    } else {
+        "https://github.com/ppupy1209/rondo/releases/latest/download"
+    }
+    $Temp = Join-Path $env:TEMP "rondo-install-$PID-$([guid]::NewGuid().ToString('N'))"
+    $Archive = Join-Path $Temp "rondo.zip"
+    $Checksums = Join-Path $Temp "SHA256SUMS"
+    $Extract = Join-Path $Temp "extracted"
+    New-Item -ItemType Directory -Force -Path $Extract | Out-Null
+    try {
+        Write-Host "Downloading verified Rondo release..."
+        Invoke-WebRequest "$ReleaseUrl/rondo.zip" -OutFile $Archive
+        Invoke-WebRequest "$ReleaseUrl/SHA256SUMS" -OutFile $Checksums
+        Confirm-Checksum $Checksums $Archive "rondo.zip"
+        Expand-Archive $Archive -DestinationPath $Extract -Force
+        $Sources = @(Get-ChildItem -LiteralPath $Extract -Directory -Force)
+        if ($Sources.Count -ne 1 -or (Test-ReparsePoint $Sources[0].FullName)) {
+            throw "Downloaded Rondo archive is invalid."
+        }
+        $Source = $Sources[0]
+        $RondoScript = Join-Path $Source.FullName "bin\rondo"
+        if (-not (Test-Path -LiteralPath $RondoScript -PathType Leaf) -or (Test-ReparsePoint $RondoScript)) {
+            throw "Downloaded Rondo archive is invalid."
+        }
+        $Detected = ((& $Python $RondoScript --version | Select-Object -Last 1) -replace '^rondo\s+', '').Trim()
+        if ($LASTEXITCODE -ne 0 -or $Detected -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Downloaded Rondo version is invalid."
+        }
+        if ($Requested -and $Requested -ne $Detected) {
+            throw "Requested Rondo $Requested but archive contains $Detected."
+        }
+
+        $Previous = "$Repo.previous"
+        $Staging = "$Repo.installing"
+        if (Test-Path -LiteralPath $Repo) { $null = Get-ManagedVersion $Repo }
+        if (Test-Path -LiteralPath $Previous) {
+            $null = Get-ManagedVersion $Previous
+        }
+        if (Test-Path -LiteralPath $Staging) { throw "An interrupted Rondo installation needs recovery: $Staging" }
+        New-Item -ItemType Directory -Force -Path (Split-Path $Repo) | Out-Null
+        $HadPrevious = Test-Path -LiteralPath $Repo
+        if ($HadPrevious) { Move-Item -LiteralPath $Repo -Destination $Staging }
+        try {
+            Move-Item -LiteralPath $Source.FullName -Destination $Repo
+            $Marker = Join-Path $Repo ".rondo-release.json"
+            $TemporaryMarker = "$Marker.tmp"
+            $MarkerValue = @{schema=1; version=$Detected; source="github-release"} | ConvertTo-Json -Compress
+            [IO.File]::WriteAllText($TemporaryMarker, "$MarkerValue`n", [Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath $TemporaryMarker -Destination $Marker -Force
+        } catch {
+            if (Test-Path -LiteralPath $Repo) { Remove-Item -LiteralPath $Repo -Recurse -Force }
+            if ($HadPrevious -and (Test-Path -LiteralPath $Staging)) {
+                Move-Item -LiteralPath $Staging -Destination $Repo
+            }
+            throw
+        }
+        if ($HadPrevious) {
+            if (Test-Path -LiteralPath $Previous) {
+                Remove-Item -LiteralPath $Previous -Recurse -Force
+            }
+            Move-Item -LiteralPath $Staging -Destination $Previous
+        }
+    } finally {
+        if (Test-Path -LiteralPath $Temp) { Remove-Item -LiteralPath $Temp -Recurse -Force }
+    }
 }
 
 $Zellij = Get-Command zellij.exe -ErrorAction SilentlyContinue
 if (-not $Zellij -and -not (Test-Path (Join-Path $Bin "zellij.exe"))) {
-    Write-Host "Installing Zellij..."
+    Write-Host "Installing Zellij $ZellijVersion (verified)..."
     $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
     if ($architecture -notin @("Arm64", "X64")) { throw "Unsupported Windows architecture: $architecture" }
     # Zellij currently publishes an x64 Windows build. Windows on Arm can run it
     # through the operating system's x64 emulation.
     $target = "x86_64"
-    $release = Invoke-RestMethod "https://api.github.com/repos/zellij-org/zellij/releases/latest"
-    $asset = $release.assets | Where-Object { $_.name -eq "zellij-$target-pc-windows-msvc.zip" } | Select-Object -First 1
-    if (-not $asset) { throw "The latest Zellij release has no Windows $target build." }
-    $zip = Join-Path $env:TEMP "zellij-$PID.zip"
-    $extract = Join-Path $env:TEMP "zellij-$PID"
-    Invoke-WebRequest $asset.browser_download_url -OutFile $zip
-    Expand-Archive $zip -DestinationPath $extract -Force
-    $binary = Get-ChildItem $extract -Filter zellij.exe -Recurse | Select-Object -First 1
-    if (-not $binary) { throw "Downloaded Zellij archive is invalid." }
-    Copy-Item $binary.FullName (Join-Path $Bin "zellij.exe") -Force
-    Remove-Item -Recurse -Force $extract, $zip -ErrorAction SilentlyContinue
+    $asset = "zellij-$target-pc-windows-msvc.zip"
+    $expectedDigest = "45f25febb588d36f499232b3ba80a9edcde3b3a2a85bebb105a82457b0ca6aef"
+    $base = "https://github.com/zellij-org/zellij/releases/download/v$ZellijVersion"
+    $temp = Join-Path $env:TEMP "zellij-$PID-$([guid]::NewGuid().ToString('N'))"
+    $zip = Join-Path $temp $asset
+    $extract = Join-Path $temp "extracted"
+    New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    try {
+        Invoke-WebRequest "$base/$asset" -OutFile $zip
+        $actualDigest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualDigest -ne $expectedDigest) { throw "Checksum mismatch: $asset" }
+        Expand-Archive $zip -DestinationPath $extract -Force
+        $binaries = @(Get-ChildItem -LiteralPath $extract -Filter zellij.exe -Recurse -File)
+        if ($binaries.Count -ne 1 -or (Test-ReparsePoint $binaries[0].FullName)) {
+            throw "Downloaded Zellij archive is invalid."
+        }
+        Copy-Item -LiteralPath $binaries[0].FullName -Destination (Join-Path $Bin "zellij.exe") -Force
+    } finally {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
+    }
 }
 
 function Write-PythonLauncher([string]$Name, [string]$Script) {
