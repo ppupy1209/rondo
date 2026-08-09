@@ -1,234 +1,145 @@
-# ai-tools
+# Rondo
 
-Claude Code · Codex · Antigravity · Kimi · Grok 를 프로젝트 단위로 함께 쓰기 위한 개인 도구.
+> One project. Every coding agent. One continuous thread.
 
-- **`ai`** — 프로젝트마다 zellij 세션 하나. 한 화면에 AI 3개, 껐다 켜도 유지
-- **`handoff`** — 세션이 끝나면 그동안의 커밋을 레포의 핸드오프 문서에 기록
-- **`ai-status`** — 세션 최상단 바. 패널별 모델과 남은 사용량
-- **`claude-statusline`** — Claude Code 상태줄. 위 바에 쓸 데이터도 남긴다
-- **`codex-session` · `agy-session`** — `ai` 가 패널에서 쓰는 래퍼. 직접 칠 일은 없다
+[한국어](README.ko.md)
 
-## 설치
+Rondo keeps Claude Code, Codex, Gemini, Kimi, and Grok in one persistent terminal workspace. It removes window juggling, shows each agent's local usage state, and carries unfinished work from Claude to Codex when Claude reaches its usage limit.
 
-```sh
-git clone https://github.com/ppupy1209/ai-tools.git ~/ai-tools
-sh ~/ai-tools/install.sh
-```
+Rondo is local-first. It reads the files that each installed CLI already stores on your machine and does not add a hosted service, account, or API key.
 
-필요한 것: `zellij`(`brew install zellij`), `~/.local/bin` 이 PATH 에 있을 것.
+## Install
 
-설치는 **symlink** 를 건다. 이후 업데이트는 pull 만 하면 즉시 반영된다.
+Requirements: macOS or Linux, Python 3.9+, Git, and [zellij](https://zellij.dev/).
 
 ```sh
-git -C ~/ai-tools pull
+git clone https://github.com/ppupy1209/rondo.git ~/rondo
+sh ~/rondo/install.sh
+rondo setup
 ```
 
-`install.sh` 재실행은 파일이 새로 추가됐을 때만. 여러 번 실행해도 안전하다.
+The installer creates symlinks in `~/.local/bin`, so `git -C ~/rondo pull` updates the installation immediately. Make sure `~/.local/bin` is in `PATH`.
 
-## `ai` — 프로젝트별 AI 세션
+Existing `ai-tools` installations are migrated on first run. The old `ai`, `ai-status`, and `claude-statusline` commands remain compatibility aliases.
+
+After pulling this rename into an existing clone, run `sh ~/ai-tools/install.sh` once so the new `rondo*` command symlinks are added. The clone directory itself may stay named `ai-tools`.
+
+## Quick start
 
 ```sh
-ai              # 세션 열기 / 붙기 (첫 실행이면 setup 부터)
-ai setup        # 어떤 패널을 띄울지 고른다
-ai add kimi     # 열려 있는 세션에 패널 추가
-ai help         # 단축키와 사용법
-ai -l           # 열려 있는 세션 목록
+cd ~/projects/my-project
+rondo             # open or attach to the project's persistent workspace
+rondo setup       # choose language, agents, and relay behavior
+rondo add         # select and add another agent pane
+rondo doctor      # diagnose dependencies and configuration
 ```
 
-### 첫 실행 — `ai setup`
+`rondo setup` is a real selector: move with arrow keys, toggle agents with Space, and save with Enter. Agent names never need to be typed.
 
-구성 파일(`~/.config/ai-tools/panels`)이 없으면 `ai` 가 먼저 물어본다.
-
-```
-패널로 띄울 AI 를 고르세요.
-
-  1) claude   Claude Code              설치됨
-  2) codex    Codex CLI                설치됨
-  3) gemini   Antigravity CLI (agy)    설치됨
-  4) kimi     Kimi Code CLI            미설치 — README 설치 안내 참고
-  5) grok     Grok Build               설치됨
-
-이름을 공백으로 구분해 입력. 그냥 엔터를 누르면 기본값: claude codex gemini
->
+```text
+┌────────────────────────────────────────────────────┐
+│ claude 42%   codex 88%   gemini 61%   relay ready │
+├────────────────────────┬───────────────────────────┤
+│                        │          codex            │
+│        claude          ├───────────────────────────┤
+│                        │          gemini           │
+└────────────────────────┴───────────────────────────┘
+  tabs: agents | shell
 ```
 
-로그인·초기 설정은 세션이 열린 뒤 각 패널 안에서 하면 된다.
+The first selected agent gets the left half. Additional agents stack on the right. Detaching or closing the terminal does not stop the zellij session.
 
-레이아웃은 고른 패널로 매번 생성한다(`~/.cache/ai-tools/layout.kdl`). 첫 패널이 왼쪽 절반, 나머지가 오른쪽에 세로로 쌓인다. 구성을 바꾸려면 `ai setup` 후 세션을 새로 열면 된다.
+## How it works
 
-```
-├──────────────────────────────────────┤  ← 상태 바 (ai-status)
-│                  │      codex       │
-│      claude      ├──────────────────┤
-│                  │      gemini      │
-└──────────────────┴──────────────────┘
-   탭: ai | shell
-```
+1. `rondo` resolves the current Git root and maps it to one zellij session.
+2. It builds a layout from `~/.config/rondo/panels` and launches each native CLI in the same working tree.
+3. `rondo-status` reads local CLI state every five seconds and renders only the panes that are open.
+4. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
+5. When Claude reaches the configured usage threshold, Rondo can create a continuity packet or let Codex continue automatically.
 
-### 패널 추가 · 삭제
+The agents do not share a vendor chat session. They share the real project directory, Git state, a persistent terminal workspace, and a small provider-neutral continuity packet.
+
+## Continuity Relay
+
+Claude Code exposes its current model, rate limits, session ID, and transcript path to a local status-line command. Rondo uses that signal when either active limit reaches 1% remaining.
 
 ```sh
-ai add <claude|codex|gemini|kimi|grok>
+rondo relay             # show mode and pending packet
+rondo relay ready       # prepare a packet; wait for explicit continuation (default)
+rondo relay auto        # let Codex continue immediately
+rondo relay off         # usage display only
+rondo continue          # open pending work in interactive Codex
 ```
 
-zellij 세션 안에서 실행한다(보통 `shell` 탭). 종료 후 `handoff` 까지 자동으로 이어 붙는다. 설치 안 된 CLI 는 실행 전에 걸러낸다.
+A continuity packet contains:
 
-삭제는 zellij 기본 키다. 따로 명령이 없다.
+- the latest user and Claude messages, capped to a small excerpt;
+- branch, HEAD, working-tree status, diff statistics, and recent commits;
+- a handoff contract telling Codex to inspect current work, avoid redoing it, validate the result, and avoid remote or destructive actions.
 
-- `Ctrl+p` 다음 `x` — 현재 패널 닫기
-- `Ctrl+p` 다음 `n` — 빈 패널 열기
+Packets live under `~/.cache/rondo/relay/`, use file mode `0600`, redact common token formats, and are deduplicated per Claude session and reset window. They are never committed. In `ready` mode, nothing is sent to Codex until you run `rondo continue`.
 
-### 지원 CLI
+`auto` is deliberately opt-in. It runs `codex exec` with the `workspace-write` sandbox, no network flag, no approval bypass, and instructions that forbid pushing, deploying, remote changes, and destructive operations. Output is saved beside the packet.
 
-| 에이전트 | 명령 | 기본 레이아웃 | 설치 |
-|---|---|---|---|
-| Claude Code | `claude` | ✓ | `curl -fsSL https://claude.ai/install.sh \| bash` |
-| Codex CLI | `codex` | ✓ | `npm install -g @openai/codex` |
-| Antigravity CLI (`gemini` 패널) | `agy` | ✓ | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
-| Kimi Code CLI | `kimi` | | `curl -fsSL https://code.kimi.com/kimi-code/install.sh \| bash` |
-| Grok Build | `grok` | | `curl -fsSL https://x.ai/cli/install.sh \| bash` |
+## Supported agents
 
-기본 레이아웃에 3개만 두는 이유: 한 화면에 5개면 패널당 40열 남짓이라 TUI 가 깨진다. 나머지는 `ai add` 로 필요할 때만.
-
-> **npm 이름 주의.** Kimi 와 Grok 은 npm 에 공식 패키지가 없다. `@kimi-code/cli` 는 존재하지 않고, `kimi-cli`(0.0.2) 와 `@xai-official/grok`(1.0.0) 은 저장소 URL 도 없는 별개 패키지다. [xai-org/grok-build](https://github.com/xai-org/grok-build) 는 "npm 패키지 없음(Rust 프로젝트)"이라고 명시한다. 위 표의 공식 설치 스크립트만 쓸 것.
-
-설치 위치가 서로 다르다 — `kimi` 는 `~/.kimi-code/bin`, `grok` 은 `~/.grok/bin`. 각 설치 스크립트가 `~/.zshrc` 에 PATH 를 추가하므로 설치 후 새 터미널을 열어야 `ai add` 가 찾는다.
-
-대상을 늘리려면 `bin/ai` 의 `agent_cmd()` 에 한 줄 추가하면 된다.
-
-레포 하위 디렉터리에서 실행해도 **레포 루트 이름**으로 잡힌다. 레포가 아니면 현재 디렉터리 이름을 쓴다.
-
-키: `Ctrl+p`+방향키 pane 이동 · `Ctrl+t`+방향키 탭 이동 · `Ctrl+o` `d` 디태치
-
-디태치해도 세션은 살아 있다. 다른 PC 나 폰에서 SSH 로 들어와 `ai` 를 다시 치면 그대로 이어진다.
-
-세션 정리:
-
-```sh
-zellij delete-session <이름> --force
-```
-
-## `handoff` — 작업 기록
-
-Claude Code 세션이 끝나면(`SessionEnd` 훅) 자동 실행된다. 지난 실행 이후의 **커밋 메시지**를 핸드오프 문서의 `## 현재 단계` 맨 위에 쌓는다.
-
-```
-- 2026-08-09 · Claude — docs(web): Keyset 전환 조건 명확화
-```
-
-항목이 20개를 넘으면 오래된 것부터 `<문서와 같은 위치>/archive/` 로 옮긴다. 지우지 않는다. 그래서 다음 세션이 읽어야 할 분량이 계속 짧게 유지된다.
-
-### 레포마다 켜기 (opt-in)
-
-대상 문서가 없는 레포에서는 아무 일도 하지 않는다. 켜려면:
-
-```sh
-handoff --init
-```
-
-`docs/handoff.md` 가 생긴다. 대상 문서를 찾는 순서:
-
-1. `$HANDOFF_FILE`
-2. `docs/collab/status.md`
-3. `docs/handoff.md`
-
-`## 현재 단계` 헤딩이 있어야 동작한다.
-
-### AI 별 연결 방식
-
-| CLI | 방식 | 실행 시점 |
+| Pane | Executable | Status source |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` 의 `SessionEnd` 훅 | 세션 종료 |
-| Gemini CLI | `~/.gemini/settings.json` 의 `SessionEnd` 훅 (Claude 와 같은 스키마) | 세션 종료 |
-| Codex CLI | `codex-session` 래퍼 | codex 종료 직후 |
-| Antigravity CLI | `agy-session` 래퍼 | agy 종료 직후 |
-| Kimi · Grok | `ai add` 가 붙이는 래퍼 | CLI 종료 직후 |
+| Claude Code | `claude` | Claude status-line JSON |
+| Codex CLI | `codex` | local thread SQLite + rollout rate-limit snapshots |
+| Gemini / Antigravity | `agy` | local conversation DB + cached `/usage` output |
+| Kimi Code | `kimi` | pane presence only |
+| Grok Build | `grok` | pane presence only |
 
-Claude · Gemini 는 진짜 `SessionEnd` 훅이 있다. 나머지는 없거나 확인되지 않아 실행을 감싼다.
+Rondo never reads saved credentials or calls a vendor API directly. Gemini's own `agy -p "/usage"` command runs in the background at most once every ten minutes while its pane is open.
 
-Codex 에 훅을 못 다는 이유: 훅 이벤트 목록에 **세션 종료가 없다**. `pre_tool_use` · `post_tool_use` · `session_start` · `user_prompt_submit` · `subagent_start` · `subagent_stop` · `pre_compact` · `post_compact` · `permission_request` 뿐이다. `notify` 키가 있지만 Computer Use 가 이미 쓰고 있어 건드리지 않는다.
+## Commands
 
-래퍼 방식은 `ai` 로 띄운 세션에서만 돈다. CLI 를 직접 실행했다면 끝나고 한 번:
-
-```sh
-handoff Codex
-```
-
-## `claude-statusline` — 모델 · 컨텍스트 · 사용 한도
-
-Claude Code 하단 상태줄에 이렇게 뜬다.
-
-```
-Opus 5 high · 5h ▓▓░░░░░░ 28% (2h26m) · wk ▓▓▓▓▓░░░ 64% (1d5h)
-```
-
-Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. 거기에 `rate_limits.five_hour` · `seven_day` 가 `used_percentage` 와 `resets_at` 로 들어 있다. **CLI 에서 5시간/주간 한도를 보는 방법은 이것뿐이다** — 별도 서브커맨드는 없고, `/status` 로 세션 중 확인만 가능하다.
-
-`rate_limits` 는 구독 계정에서 첫 API 응답 이후에만 들어온다. 없으면(사용량 과금 계정, 세션 시작 직후) 해당 항목을 빼고 출력한다.
-
-`install.sh` 가 `~/.claude/settings.json` 에 등록한다. **이미 `statusLine` 이 설정돼 있으면 건드리지 않는다** — 다른 statusline 플러그인을 쓰고 있다면 그쪽이 유지된다.
-
-## `ai-status` — 상단 통합 바
-
-`ai` 세션 최상단 1행. 화면은 5초마다 다시 그리지만, **값의 신선도는 출처마다 다르다.**
-
-| 값 | 언제 갱신되나 |
+| Command | Purpose |
 |---|---|
-| Codex 모델·한도 | 매 틱(5초). rollout 로그를 바로 읽는다 |
-| Gemini 모델 | 매 틱. 한도는 10분마다 `agy -p "/usage"` |
-| **Claude 한도** | **Claude Code 가 statusLine 을 그릴 때만.** 패널이 놀고 있으면 갱신되지 않는다 |
+| `rondo` | Open or attach to the current project's session |
+| `rondo setup` | Choose language, panes, and relay mode |
+| `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
+| `rondo language` | Switch Korean / English |
+| `rondo relay [off\|ready\|auto]` | Inspect or change the continuity strategy |
+| `rondo continue` | Claim the pending packet in interactive Codex |
+| `rondo doctor` | Check zellij, agents, and configuration |
+| `rondo -l` | List persistent sessions |
+| `handoff --init` | Enable the optional Git handoff log in a repository |
 
-Claude 한도는 CLI 가 statusLine 으로 넘겨줄 때만 받을 수 있다. 그 패널에서 대화를 하고 있으면 응답마다 갱신되고, 가만히 두면 마지막 값이 그대로 남는다. 그래서 값이 2분 넘게 낡으면 `6m전` 처럼 **언제 기준인지 붙여서** 표시한다. 실제 잔량과 어긋나 보이면 그 표시를 확인할 것. **열려 있는 패널만** 표시한다 — `zellij action dump-layout` 의 패널 이름을 읽어 거른다.
+Inside zellij: `Ctrl+p` + arrows moves panes, `Ctrl+t` + arrows moves tabs, and `Ctrl+o` then `d` detaches.
 
+## Optional Git handoff log
+
+Run `handoff --init` in a repository to create `docs/handoff.md`. On session end, Rondo records commit subjects made since the previous handoff. It keeps the latest 20 entries in the active section and archives older entries instead of deleting them.
+
+The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/handoff.md`. Repositories without one of these files are left untouched.
+
+## Configuration and privacy
+
+```text
+~/.config/rondo/
+  language       ko | en
+  panels         selected agent names
+  relay          off | ready | auto
+  threshold      remaining percentage (default: 1)
+
+~/.cache/rondo/
+  layout.kdl     generated zellij layout
+  claude.*       local display cache
+  relay/         private continuity packets and Codex logs
 ```
-claude Sonnet 5 5h ▓░░░░░░░ 10%(1h53m) wk ▓▓▓▓▓░░░ 62%(1d6h)   codex gpt-5.6-sol xhigh wk ▓▓▓▓▓▓▓░ 93%(6d20h)   gemini gemini-3.6-flash-high 5h ▓▓▓▓▓▓▓▓ 100%(4h29m) wk ▓▓▓▓▓▓▓▓ 99%(1d4h)
-```
 
-배터리 바는 **남은 양**이다. `5h ▓▓░░░░░░ 28%` 는 5시간 창에서 28% 남았고 2시간 26분 뒤 리셋된다는 뜻. 리셋 시각이 지난 창은 표시하지 않는다.
+No telemetry is included. Rondo does not store credentials. A relay excerpt can contain conversation text, so use `ready` mode when work must not cross providers without an explicit action.
 
-패널이 좁으면 줄바꿈으로 깨지므로 폭에 맞춰 잘라낸다. zellij 밖에서 `--once` 로 실행하면 전부 보여준다.
-
-각 CLI 가 **로컬에 남기는 것만** 읽는다. 저장된 자격증명으로 API 를 호출하지 않는다.
-
-| CLI | 출처 | 얻는 것 |
-|---|---|---|
-| Claude | `claude-statusline` 이 남기는 `~/.cache/ai-tools/claude.<레포>.json` (모델·컨텍스트)<br>`claude-limits.json` (한도, 계정 단위 공유) | 모델 · 컨텍스트% · 5시간/주간 한도 |
-| Codex | `~/.codex/state_5.sqlite` 의 `threads`<br>`~/.codex/sessions/**/rollout-*.jsonl` 의 `rate_limits` | 모델 · reasoning effort · 남은 한도 |
-| Gemini (Antigravity) | 대화 DB `~/.gemini/antigravity-cli/conversations/*.db`<br>`agy -p "/usage"` 결과 캐시 | 모델 · 남은 한도 |
-| Kimi · Grok | 없음 | `-` |
-
-> **값이 `-` 로만 나온다면** 대개 둘 중 하나다.
->
-> 1. **레포 밖에서 `ai` 를 실행했다.** 데이터를 프로젝트 경로로 찾기 때문에, 홈 디렉터리에서 띄우면 Codex 는 항상 `-` 다. 프로젝트 안에서 `ai` 를 실행할 것.
-> 2. **해당 CLI 가 아직 아무것도 안 했다.** 첫 실행 화면(트러스트 프롬프트, 훅 검토, 업데이트 안내)에서 멈춰 있으면 세션이 시작되지 않아 로컬에 아무 기록도 남지 않는다. 프롬프트를 넘기고 메시지를 한 번 보내야 채워진다.
-
-주의할 점:
-
-- **Claude 의 5시간/주간 한도는 어느 프로젝트에서든 한 번 메시지를 보내면 그 뒤로 모든 레포에 표시된다.** `rate_limits` 는 첫 API 응답 이후에만 statusLine 에 실리는데, 한도 자체는 계정 단위라 `claude-limits.json` 에 따로 모아 공유한다. 모델·컨텍스트는 레포별로 유지된다.
-- **Claude 값은 Claude Code 를 한 번 띄워야 채워진다.** statusLine 이 그릴 때 캐시가 쓰인다. 1시간 지난 값은 버린다.
-- Codex 는 `thread_source='user'` 로 걸러 `codex-auto-review` 같은 서브에이전트 스레드를 제외한다.
-- Codex 한도는 rollout 로그의 `rate_limits` 스냅샷에서 읽는다. 파일 꼬리 400KB 만 읽어 마지막 스냅샷을 쓴다. 창 개수는 요금제마다 다르다 — `primary`(주간) 만 있고 `secondary`(5시간) 가 없는 요금제도 있어서, 있는 창만 그린다.
-- SQLite 는 `mode=ro` 로 먼저 연다. `immutable=1` 을 먼저 쓰면 **WAL 을 통째로 무시해** 최근 세션이 안 보인다(codex DB 는 WAL 이고 `-wal` 이 수 MB). 잠겨서 실패할 때만 `immutable` 로 물러서고, 그래도 실패하면 마지막 성공값을 유지한다.
-- Gemini(Antigravity) 는 대화 DB 가 protobuf 라 모델명만 문자열로 긁는다. 한도는 디스크에 안 남아서 **`agy -p "/usage"` 를 10분마다 백그라운드로 한 번 돌려** 캐시한다(호출에 8초쯤 걸려 바를 막지 않도록 별도 스레드). gemini 패널이 열려 있을 때만 돈다.
-- 상태 바 패널은 **입력 에코를 꺼 둔다**. zellij 에 '포커스 불가' 옵션이 없어 클릭 자체는 막지 못하지만, 클릭 후 타이핑해도 바가 밀리지 않는다.
-- Antigravity · Kimi · Grok 은 모델·토큰·한도를 로컬 파일에 남기지 않는다. Grok 은 사용량을 OpenTelemetry 로만 내보내고(자체 컬렉터 필요), 세션 중 `/cost` · `/context` 로만 볼 수 있다. 남기기 시작하면 `ai-status` 에 함수 하나 추가하면 된다.
-
-단독 실행:
+## Development
 
 ```sh
-ai-status --once
+python3 -m unittest discover -s tests -v
+python3 -m py_compile bin/rondo bin/rondo-relay bin/rondo-claude-status bin/ai-status
+sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
 
-### 기록되는 것 / 안 되는 것
+## License
 
-커밋 메시지만 기록한다. **커밋하지 않으면 아무것도 남지 않는다.**
-
-`## 다음 액션`, 막힌 것, 결정 근거는 사람이 쓴다. 스크립트가 건드리지 않는다.
-
-## 제거
-
-```sh
-rm ~/.local/bin/ai ~/.local/bin/ai-status ~/.local/bin/claude-statusline ~/.local/bin/handoff ~/.local/bin/codex-session ~/.local/bin/agy-session ~/.config/zellij/layouts/ai.kdl
-```
-
-`~/.claude/settings.json` 과 `~/.gemini/settings.json` 의 `hooks.SessionEnd` 항목도 지운다. 설치 시 만들어 둔 `.bak` 이 각각 같은 위치에 있다.
+MIT

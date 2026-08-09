@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""zellij 상단 바 — 패널별 모델과 남은 사용량.
+"""Rondo zellij status bar — models, usage, and continuity relay.
 
 각 CLI 가 로컬에 남기는 것만 읽는다. 자격증명으로 API 를 호출하지 않는다.
 
@@ -11,6 +11,7 @@
 열려 있는 패널만 표시한다(zellij dump-layout 기준). 한 번만 출력하려면 --once.
 """
 import calendar
+import hashlib
 import json
 import os
 import re
@@ -23,7 +24,10 @@ import termios
 import time
 
 CACHE = os.path.join(
-    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "ai-tools"
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "rondo"
+)
+CONFIG = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "rondo"
 )
 LIMITS = os.path.join(CACHE, "claude-limits.json")
 CODEX_DB = os.path.expanduser("~/.codex/state_5.sqlite")
@@ -40,6 +44,18 @@ INTERVAL = 5
 # 읽기에 실패한 틱에서 값이 사라지지 않도록 마지막 성공값을 들고 있는다.
 # DB 가 쓰기 중이면 열기가 실패해 바가 깜빡이던 문제를 막는다.
 LAST = {}
+
+
+def setting(name, default=""):
+    try:
+        with open(os.path.join(CONFIG, name)) as fh:
+            return fh.read().strip()
+    except OSError:
+        return default
+
+
+def repo_key(root):
+    return hashlib.sha256(os.path.realpath(root).encode()).hexdigest()[:16]
 
 
 def repo_root():
@@ -116,7 +132,7 @@ def claude_limits():
 def claude_field(root):
     limits, age = claude_limits()
     try:
-        with open(os.path.join(CACHE, "claude.%s.json" % os.path.basename(root))) as fh:
+        with open(os.path.join(CACHE, "claude.%s.json" % repo_key(root))) as fh:
             data = json.load(fh)
     except (OSError, ValueError):
         data = {}
@@ -304,6 +320,25 @@ AGENTS = [
 ]
 
 
+def relay_field(root):
+    try:
+        with open(os.path.join(CACHE, "relay", repo_key(root), "pending.json")) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    status = data.get("status")
+    if status in ("completed", "failed") and time.time() - data.get("updated_at", 0) > 300:
+        return None
+    language = setting("language", "en")
+    labels = {
+        "ready": "인계 준비" if language == "ko" else "ready",
+        "running": "인계 중" if language == "ko" else "running",
+        "completed": "인계 완료" if language == "ko" else "complete",
+        "failed": "인계 실패" if language == "ko" else "failed",
+    }
+    return labels.get(status)
+
+
 def open_panes():
     """현재 세션에 열려 있는 패널 이름. zellij 밖이면 None."""
     if not os.environ.get("ZELLIJ_SESSION_NAME"):
@@ -332,7 +367,11 @@ def line(root):
         else:
             value = LAST.get(name)
         parts.append(f"{name} {value or '-'}")
-    return "   ".join(parts) or "패널 없음"
+    relay = relay_field(root)
+    if relay:
+        parts.append(f"relay→codex {relay}")
+    empty = "패널 없음" if setting("language", "en") == "ko" else "no panes"
+    return "   ".join(parts) or empty
 
 
 def mute_input(fd):

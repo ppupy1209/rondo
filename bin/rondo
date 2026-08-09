@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+"""Rondo — one durable terminal workspace for coding agents."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import termios
+import tty
+from pathlib import Path
+
+VERSION = "0.2.0"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
+LEGACY_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ai-tools"
+
+AGENTS = {
+    "claude": ("claude", "claude", "Claude Code"),
+    "codex": ("codex-session", "codex", "Codex CLI"),
+    "gemini": ("agy-session", "agy", "Antigravity CLI (agy)"),
+    "kimi": ("kimi-session", "kimi", "Kimi Code CLI"),
+    "grok": ("grok-session", "grok", "Grok Build"),
+}
+DEFAULT_AGENTS = ("claude", "codex", "gemini")
+
+TEXT = {
+    "ko": {
+        "usage": """사용법
+  rondo                 이 프로젝트의 세션 열기 / 붙기
+  rondo setup           언어·패널·자동 인계 설정
+  rondo add [에이전트]   현재 세션에 패널 추가
+  rondo language        한국어 / English 변경
+  rondo relay [모드]    Claude → Codex 인계 상태 / 모드 변경
+  rondo continue        준비된 인계를 Codex에서 계속
+  rondo doctor          설치와 설정 진단
+  rondo -l              열려 있는 세션 목록
+
+세션 안에서
+  Ctrl+p 다음 x         현재 패널 닫기
+  Ctrl+p 방향키         패널 이동
+  Ctrl+t 방향키         탭 이동 (agents | shell)
+  Ctrl+o 다음 d         디태치 (세션은 계속 실행)
+""",
+        "language_title": "언어를 선택하세요",
+        "agent_title": "함께 실행할 코딩 에이전트를 선택하세요",
+        "agent_hint": "↑/↓ 이동 · Space 선택 · Enter 저장",
+        "installed": "설치됨",
+        "missing": "미설치",
+        "none": "하나 이상의 설치된 에이전트를 선택하세요.",
+        "relay_title": "Claude 사용량이 1% 이하일 때",
+        "relay_off": "끄기",
+        "relay_off_desc": "사용량만 표시하고 인계하지 않음",
+        "relay_ready": "인계 준비 (권장)",
+        "relay_ready_desc": "로컬 패킷을 만들고 직접 시작할 때까지 대기",
+        "relay_auto": "자동 실행",
+        "relay_auto_desc": "패킷을 만들고 Codex가 즉시 이어서 작업",
+        "saved": "설정 저장 완료",
+        "panels": "패널",
+        "relay": "인계",
+        "language": "언어",
+        "login": "로그인과 초기 설정은 각 패널 안에서 진행하세요.",
+        "unknown": "지원하지 않는 에이전트: {name}",
+        "not_installed": "{name}이(가) 설치되지 않았습니다. `rondo doctor`로 확인하세요.",
+        "need_zellij": "zellij 세션 안에서 실행하세요. 먼저 `rondo`를 실행하면 됩니다.",
+        "need_tty": "대화형 터미널이 필요합니다. 자동 설정은 RONDO_LANG, RONDO_PANELS, RONDO_RELAY 환경변수를 사용하세요.",
+        "bad_config": "패널 설정이 비었거나 잘못되었습니다. `rondo setup`을 다시 실행하세요.",
+        "relay_status": "인계 모드: {mode} · 임계치: 남은 사용량 {threshold}%",
+        "relay_packet": "대기 중인 인계: {path}",
+        "relay_last": "최근 인계 상태: {status}{log}",
+        "relay_empty": "대기 중인 인계가 없습니다.",
+        "relay_mode_saved": "인계 모드를 {mode}(으)로 변경했습니다.",
+        "doctor_title": "Rondo 진단",
+        "doctor_ok": "정상",
+        "doctor_missing": "필요",
+        "doctor_config": "설정",
+        "doctor_agents": "에이전트",
+        "doctor_hint": "필수 항목을 설치한 뒤 `rondo setup`을 실행하세요.",
+        "select_auto_no_codex": "자동 인계에는 Codex CLI가 필요합니다.",
+    },
+    "en": {
+        "usage": """Usage
+  rondo                 Open or attach to this project's session
+  rondo setup           Configure language, panes, and continuity relay
+  rondo add [agent]     Add a pane to the current session
+  rondo language        Switch between English and Korean
+  rondo relay [mode]    Show or change Claude → Codex relay mode
+  rondo continue        Continue a prepared relay in Codex
+  rondo doctor          Diagnose the installation and configuration
+  rondo -l              List running sessions
+
+Inside a session
+  Ctrl+p then x         Close the current pane
+  Ctrl+p + arrow        Move between panes
+  Ctrl+t + arrow        Move between tabs (agents | shell)
+  Ctrl+o then d         Detach (the session keeps running)
+""",
+        "language_title": "Choose a language",
+        "agent_title": "Choose coding agents to run together",
+        "agent_hint": "↑/↓ move · Space toggle · Enter save",
+        "installed": "installed",
+        "missing": "not installed",
+        "none": "Select at least one installed agent.",
+        "relay_title": "When Claude has 1% usage remaining",
+        "relay_off": "Off",
+        "relay_off_desc": "Show usage only; never prepare a relay",
+        "relay_ready": "Prepare relay (recommended)",
+        "relay_ready_desc": "Create a local packet and wait for you to continue",
+        "relay_auto": "Continue automatically",
+        "relay_auto_desc": "Create a packet and let Codex continue immediately",
+        "saved": "Configuration saved",
+        "panels": "Panes",
+        "relay": "Relay",
+        "language": "Language",
+        "login": "Complete sign-in and first-run setup inside each pane.",
+        "unknown": "Unsupported agent: {name}",
+        "not_installed": "{name} is not installed. Run `rondo doctor` for details.",
+        "need_zellij": "Run this inside a zellij session. Start with `rondo` first.",
+        "need_tty": "An interactive terminal is required. For automation, set RONDO_LANG, RONDO_PANELS, and RONDO_RELAY.",
+        "bad_config": "The pane configuration is empty or invalid. Run `rondo setup` again.",
+        "relay_status": "Relay mode: {mode} · threshold: {threshold}% remaining",
+        "relay_packet": "Pending relay: {path}",
+        "relay_last": "Latest relay: {status}{log}",
+        "relay_empty": "No relay is waiting.",
+        "relay_mode_saved": "Relay mode changed to {mode}.",
+        "doctor_title": "Rondo diagnostics",
+        "doctor_ok": "ok",
+        "doctor_missing": "missing",
+        "doctor_config": "Configuration",
+        "doctor_agents": "Agents",
+        "doctor_hint": "Install required items, then run `rondo setup`.",
+        "select_auto_no_codex": "Automatic relay requires Codex CLI.",
+    },
+}
+
+
+def system_language() -> str:
+    value = " ".join(os.environ.get(k, "") for k in ("LC_ALL", "LC_MESSAGES", "LANG"))
+    return "ko" if re.search(r"(^|[_. ])ko([_. ]|$)", value, re.I) else "en"
+
+
+def read_setting(name: str, default: str = "") -> str:
+    try:
+        return (CONFIG_DIR / name).read_text().strip()
+    except OSError:
+        return default
+
+
+def language() -> str:
+    forced = os.environ.get("RONDO_LANG", "").lower()
+    if forced in TEXT:
+        return forced
+    saved = read_setting("language")
+    return saved if saved in TEXT else system_language()
+
+
+LANGUAGE = language()
+
+
+def t(key: str, **values: object) -> str:
+    return TEXT[LANGUAGE][key].format(**values)
+
+
+def write_setting(name: str, value: str) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = CONFIG_DIR / name
+    temp = target.with_suffix(".tmp")
+    temp.write_text(value.rstrip() + "\n")
+    os.chmod(temp, 0o600)
+    temp.replace(target)
+
+
+def migrate_legacy_config() -> None:
+    if (CONFIG_DIR / "panels").exists() or not (LEGACY_CONFIG / "panels").exists():
+        return
+    try:
+        panels = (LEGACY_CONFIG / "panels").read_text().strip().split()
+    except OSError:
+        return
+    panels = [name for name in panels if name in AGENTS]
+    if panels:
+        write_setting("panels", " ".join(panels))
+        write_setting("language", system_language())
+        write_setting("relay", "ready")
+        write_setting("threshold", "1")
+
+
+def installed(name: str) -> bool:
+    return shutil.which(AGENTS[name][1]) is not None
+
+
+def _read_key() -> str:
+    first = sys.stdin.buffer.read(1)
+    if first == b"\x03":
+        raise KeyboardInterrupt
+    if first == b"\x1b":
+        return (first + sys.stdin.buffer.read(2)).decode("ascii", "ignore")
+    return first.decode("utf-8", "ignore")
+
+
+def _draw(title: str, rows: list[str], hint: str = "") -> None:
+    sys.stdout.write("\x1b[2J\x1b[H" + title + "\n\n" + "\n".join(rows))
+    if hint:
+        sys.stdout.write("\n\n" + hint)
+    sys.stdout.flush()
+
+
+def choose_one(title: str, options: list[tuple[str, str]], default: int = 0) -> str:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise RuntimeError(t("need_tty"))
+    current = default
+    old = termios.tcgetattr(sys.stdin.fileno())
+    sys.stdout.write("\x1b[?25l")
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        while True:
+            rows = [f"  {'›' if i == current else ' '} {label}" for i, (_, label) in enumerate(options)]
+            _draw(title, rows, "↑/↓ · Enter")
+            key = _read_key()
+            if key in ("\x1b[A", "k"):
+                current = (current - 1) % len(options)
+            elif key in ("\x1b[B", "j"):
+                current = (current + 1) % len(options)
+            elif key in ("\r", "\n"):
+                return options[current][0]
+    finally:
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
+        sys.stdout.write("\x1b[2J\x1b[H\x1b[?25h")
+        sys.stdout.flush()
+
+
+def choose_agents(defaults: set[str]) -> list[str]:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        value = os.environ.get("RONDO_PANELS", "")
+        names = value.replace(",", " ").split()
+        valid = [name for name in names if name in AGENTS and installed(name)]
+        if not valid:
+            raise RuntimeError(t("need_tty"))
+        return valid
+
+    names = list(AGENTS)
+    selected = {name for name in defaults if name in AGENTS and installed(name)}
+    current = 0
+    old = termios.tcgetattr(sys.stdin.fileno())
+    sys.stdout.write("\x1b[?25l")
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        while True:
+            rows = []
+            for i, name in enumerate(names):
+                available = installed(name)
+                mark = "●" if name in selected else "○"
+                state = t("installed") if available else t("missing")
+                cursor = "›" if i == current else " "
+                rows.append(f"  {cursor} {mark} {name:<8} {AGENTS[name][2]:<24} {state}")
+            _draw(t("agent_title"), rows, t("agent_hint"))
+            key = _read_key()
+            if key in ("\x1b[A", "k"):
+                current = (current - 1) % len(names)
+            elif key in ("\x1b[B", "j"):
+                current = (current + 1) % len(names)
+            elif key == " ":
+                name = names[current]
+                if installed(name):
+                    selected.symmetric_difference_update({name})
+            elif key in ("\r", "\n") and selected:
+                return [name for name in names if name in selected]
+            elif key in ("\r", "\n"):
+                _draw(t("agent_title"), rows, t("none"))
+    finally:
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
+        sys.stdout.write("\x1b[2J\x1b[H\x1b[?25h")
+        sys.stdout.flush()
+
+
+def relay_options() -> list[tuple[str, str]]:
+    values = [
+        ("off", f"{t('relay_off')} — {t('relay_off_desc')}"),
+        ("ready", f"{t('relay_ready')} — {t('relay_ready_desc')}"),
+    ]
+    if installed("codex"):
+        values.append(("auto", f"{t('relay_auto')} — {t('relay_auto_desc')}"))
+    return values
+
+
+def setup() -> None:
+    global LANGUAGE
+    migrate_legacy_config()
+    requested_language = os.environ.get("RONDO_LANG", "").lower()
+    if requested_language in TEXT:
+        LANGUAGE = requested_language
+    else:
+        LANGUAGE = choose_one(
+            TEXT[LANGUAGE]["language_title"],
+            [("ko", "한국어"), ("en", "English")],
+            0 if LANGUAGE == "ko" else 1,
+        )
+
+    saved = set(read_setting("panels").split())
+    defaults = saved or {name for name in DEFAULT_AGENTS if installed(name)}
+    panels = choose_agents(defaults)
+
+    requested_relay = os.environ.get("RONDO_RELAY", "").lower()
+    valid_modes = {value for value, _ in relay_options()}
+    if requested_relay in valid_modes:
+        relay = requested_relay
+    elif not (sys.stdin.isatty() and sys.stdout.isatty()):
+        relay = "ready"
+    else:
+        current = read_setting("relay", "ready")
+        options = relay_options()
+        default = next((i for i, item in enumerate(options) if item[0] == current), 1)
+        relay = choose_one(t("relay_title"), options, default)
+
+    write_setting("language", LANGUAGE)
+    write_setting("panels", " ".join(panels))
+    write_setting("relay", relay)
+    write_setting("threshold", "1")
+    print(f"✓ {t('saved')}")
+    print(f"  {t('language')}: {'한국어' if LANGUAGE == 'ko' else 'English'}")
+    print(f"  {t('panels')}: {' '.join(panels)}")
+    print(f"  {t('relay')}: {relay}")
+    print(t("login"))
+
+
+def repo_root() -> Path:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+    )
+    return Path(result.stdout.strip()) if result.returncode == 0 else Path.cwd()
+
+
+def safe_session_name(value: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-.")
+    return name[:80] or "rondo"
+
+
+def configured_panels() -> list[str]:
+    values = read_setting("panels").split()
+    if not values or any(name not in AGENTS for name in values):
+        raise RuntimeError(t("bad_config"))
+    return values
+
+
+def write_layout(panels: list[str]) -> Path:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    target = CACHE_DIR / "layout.kdl"
+    first, rest = panels[0], panels[1:]
+    lines = [
+        "layout {",
+        '    tab name="agents" focus=true {',
+        '        pane name="status" command="rondo-status" size=1 borderless=true',
+        '        pane split_direction="vertical" {',
+        f'            pane name="{first}" command="{AGENTS[first][0]}" size="50%"',
+    ]
+    if rest:
+        lines.append('            pane split_direction="horizontal" {')
+        lines.extend(
+            f'                pane name="{name}" command="{AGENTS[name][0]}"' for name in rest
+        )
+        lines.append("            }")
+    lines.extend(["        }", "    }", '    tab name="shell"', "}"])
+    temp = target.with_suffix(".tmp")
+    temp.write_text("\n".join(lines) + "\n")
+    temp.replace(target)
+    return target
+
+
+def list_sessions() -> None:
+    os.execvp("zellij", ["zellij", "list-sessions"])
+
+
+def open_session(custom_name: str | None = None) -> None:
+    migrate_legacy_config()
+    if shutil.which("zellij") is None:
+        raise RuntimeError(t("not_installed", name="zellij"))
+    root = repo_root()
+    name = safe_session_name(custom_name or root.name)
+    existing = subprocess.run(
+        ["zellij", "list-sessions", "-sn"], capture_output=True, text=True
+    )
+    if existing.returncode == 0 and name in existing.stdout.splitlines():
+        os.execvp("zellij", ["zellij", "attach", name])
+    if not (CONFIG_DIR / "panels").exists():
+        setup()
+    panels = configured_panels()
+    unavailable = [name for name in panels if not installed(name)]
+    if unavailable:
+        raise RuntimeError(t("not_installed", name=", ".join(unavailable)))
+    layout = write_layout(panels)
+    print(f"{t('panels')}: {' '.join(panels)}")
+    os.chdir(root)
+    os.execvp("zellij", ["zellij", "-s", name, "-n", str(layout)])
+
+
+def add_agent(name: str | None) -> None:
+    if not name:
+        choices = [(key, f"{key} — {value[2]}") for key, value in AGENTS.items() if installed(key)]
+        name = choose_one(t("agent_title"), choices)
+    if name not in AGENTS:
+        raise RuntimeError(t("unknown", name=name))
+    if not installed(name):
+        raise RuntimeError(t("not_installed", name=name))
+    if not os.environ.get("ZELLIJ"):
+        raise RuntimeError(t("need_zellij"))
+    subprocess.run(["zellij", "action", "go-to-tab-name", "agents"], check=False)
+    subprocess.run(["zellij", "action", "move-focus", "down"], check=False)
+    os.execvp(
+        "zellij",
+        ["zellij", "action", "new-pane", "--name", name, "--", AGENTS[name][0]],
+    )
+
+
+def change_language() -> None:
+    global LANGUAGE
+    selected = os.environ.get("RONDO_LANG", "").lower()
+    if selected not in TEXT:
+        selected = choose_one(
+            t("language_title"),
+            [("ko", "한국어"), ("en", "English")],
+            0 if LANGUAGE == "ko" else 1,
+        )
+    LANGUAGE = selected
+    write_setting("language", selected)
+    print(f"✓ {t('language')}: {'한국어' if selected == 'ko' else 'English'}")
+
+
+def relay_index() -> dict | None:
+    key = hashlib.sha256(str(repo_root().resolve()).encode()).hexdigest()[:16]
+    index = CACHE_DIR / "relay" / key / "pending.json"
+    try:
+        return json.loads(index.read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def packet_path() -> Path | None:
+    info = relay_index()
+    try:
+        if info.get("status") != "ready":
+            return None
+        value = info.get("packet")
+        path = Path(value)
+        return path if path.exists() else None
+    except (AttributeError, TypeError):
+        return None
+
+
+def relay_command(mode: str | None) -> None:
+    valid = {"off", "ready", "auto"}
+    if mode:
+        if mode not in valid:
+            raise RuntimeError("relay mode: off | ready | auto")
+        if mode == "auto" and not installed("codex"):
+            raise RuntimeError(t("select_auto_no_codex"))
+        write_setting("relay", mode)
+        print(t("relay_mode_saved", mode=mode))
+        return
+    current = read_setting("relay", "ready")
+    threshold = read_setting("threshold", "1")
+    print(t("relay_status", mode=current, threshold=threshold))
+    info = relay_index()
+    pending = packet_path()
+    if pending:
+        print(t("relay_packet", path=pending))
+    elif info:
+        log = f" · {info['log']}" if info.get("log") else ""
+        print(t("relay_last", status=info.get("status", "unknown"), log=log))
+    else:
+        print(t("relay_empty"))
+
+
+def continue_relay() -> None:
+    script = Path(__file__).resolve().with_name("rondo-relay")
+    os.execv(script, [str(script), "--continue"])
+
+
+def doctor() -> int:
+    print(t("doctor_title"))
+    required = [("python3", True), ("zellij", True)]
+    optional = [(name, False) for name in AGENTS]
+    failed = False
+    for name, is_required in required + optional:
+        executable = name if name not in AGENTS else AGENTS[name][1]
+        path = shutil.which(executable)
+        mark = "✓" if path else ("✗" if is_required else "–")
+        state = t("doctor_ok") if path else t("doctor_missing")
+        print(f"  {mark} {name:<10} {state}{f' · {path}' if path else ''}")
+        failed = failed or (is_required and not path)
+    panels = read_setting("panels")
+    print(f"  {'✓' if panels else '–'} {t('doctor_config'):<10} {panels or t('doctor_missing')}")
+    if failed:
+        print(t("doctor_hint"))
+    return int(failed)
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    command = args[0] if args else ""
+    if command in ("help", "-h", "--help"):
+        print(t("usage"), end="")
+    elif command in ("--version", "-V"):
+        print(f"rondo {VERSION}")
+    elif command in ("-l", "--list"):
+        list_sessions()
+    elif command == "setup":
+        setup()
+    elif command == "add":
+        add_agent(args[1] if len(args) > 1 else None)
+    elif command in ("language", "lang"):
+        change_language()
+    elif command == "relay":
+        relay_command(args[1] if len(args) > 1 else None)
+    elif command == "continue":
+        continue_relay()
+    elif command == "doctor":
+        return doctor()
+    elif command:
+        open_session(command)
+    else:
+        open_session()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print()
+        raise SystemExit(130)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"rondo: {error}", file=sys.stderr)
+        raise SystemExit(1)
