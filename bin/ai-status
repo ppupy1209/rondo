@@ -23,7 +23,9 @@ import time
 CACHE = os.path.join(
     os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "ai-tools"
 )
+LIMITS = os.path.join(CACHE, "claude-limits.json")
 CODEX_DB = os.path.expanduser("~/.codex/state_5.sqlite")
+BAR_CELLS = 8
 STALE_SECONDS = 3600
 INTERVAL = 5
 
@@ -53,6 +55,25 @@ def tokens(n):
     return f"{n / 1000:.0f}k" if n >= 1000 else str(n)
 
 
+def battery(used_pct):
+    """남은 비율을 배터리처럼. used 72 -> 28% 남음."""
+    left = max(0.0, min(100.0, 100.0 - used_pct))
+    filled = int(round(left / 100 * BAR_CELLS))
+    return "\u2593" * filled + "\u2591" * (BAR_CELLS - filled), left
+
+
+def claude_limits():
+    """사용 한도는 계정 단위다. 어느 프로젝트에서 받았든 공유 파일에서 읽는다.
+    리셋 시각이 지난 창은 버린다."""
+    try:
+        with open(LIMITS) as fh:
+            limits = json.load(fh).get("rate_limits") or {}
+    except (OSError, ValueError):
+        return {}
+    now = time.time()
+    return {k: v for k, v in limits.items() if v.get("resets_at", 0) > now}
+
+
 def until(epoch):
     secs = max(0, int(epoch - time.time()))
     mins, hours = secs // 60 % 60, secs // 3600
@@ -62,23 +83,27 @@ def until(epoch):
 
 
 def claude_field(root):
+    limits = claude_limits()
     path = os.path.join(CACHE, "claude.%s.json" % os.path.basename(root))
     try:
         with open(path) as fh:
             d = json.load(fh)
     except (OSError, ValueError):
-        return None
-    # 다른 레포의 동명 프로젝트이거나 오래된 값이면 쓰지 않는다
+        d = {}
+    # 다른 레포의 동명 프로젝트이거나 오래된 값이면 모델·컨텍스트는 쓰지 않는다
     if d.get("project") != root or time.time() - d.get("at", 0) > STALE_SECONDS:
+        d = {}
+    if not d and not limits:
         return None
 
-    bits = [short_model(d.get("model"))]
+    bits = [short_model(d.get("model"))] if d.get("model") else []
     if d.get("context_used") is not None:
         bits.append(f"ctx {d['context_used']:.0f}%")
     for key, label in (("five_hour", "5h"), ("seven_day", "wk")):
-        window = (d.get("rate_limits") or {}).get(key)
+        window = limits.get(key)
         if window:
-            bits.append(f"{label} {window['used_percentage']:.0f}%({until(window['resets_at'])})")
+            bar, left = battery(window["used_percentage"])
+            bits.append(f"{label} {bar} {left:.0f}%({until(window['resets_at'])})")
     return " ".join(bits)
 
 

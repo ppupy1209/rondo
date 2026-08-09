@@ -152,12 +152,10 @@ Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. �
 `ai` 세션 최상단 1행. 5초마다 갱신. **열려 있는 패널만** 표시한다 — `zellij action dump-layout` 의 패널 이름을 읽어 거른다.
 
 ```
-# 기본 3패널
-claude Sonnet 5   codex gpt-5.6-sol xhigh 45.2M tok   antigravity -
-
-# ai add kimi / ai add grok 후
-claude Sonnet 5   codex gpt-5.6-sol xhigh 45.2M tok   antigravity -   kimi -   grok -
+claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h26m) wk ▓▓▓▓▓░░░ 64%(1d5h)   codex gpt-5.6-sol xhigh 47.4M tok   antigravity -
 ```
+
+배터리 바는 **남은 양**이다. `5h ▓▓░░░░░░ 28%` 는 5시간 창에서 28% 남았고 2시간 26분 뒤 리셋된다는 뜻. 리셋 시각이 지난 창은 표시하지 않는다.
 
 패널이 좁으면 줄바꿈으로 깨지므로 폭에 맞춰 잘라낸다. zellij 밖에서 `--once` 로 실행하면 전부 보여준다.
 
@@ -165,7 +163,7 @@ claude Sonnet 5   codex gpt-5.6-sol xhigh 45.2M tok   antigravity -   kimi -   g
 
 | CLI | 출처 | 얻는 것 |
 |---|---|---|
-| Claude | `claude-statusline` 이 남기는 `~/.cache/ai-tools/claude.<레포>.json` | 모델 · 컨텍스트% · 5시간/주간 한도 |
+| Claude | `claude-statusline` 이 남기는 `~/.cache/ai-tools/claude.<레포>.json` (모델·컨텍스트)<br>`claude-limits.json` (한도, 계정 단위 공유) | 모델 · 컨텍스트% · 5시간/주간 한도 |
 | Codex | `~/.codex/state_5.sqlite` 의 `threads` | 모델 · reasoning effort · 스레드 누적 토큰 |
 | Antigravity · Kimi · Grok | 없음 | `-` |
 
@@ -176,7 +174,7 @@ claude Sonnet 5   codex gpt-5.6-sol xhigh 45.2M tok   antigravity -   kimi -   g
 
 주의할 점:
 
-- **Claude 의 5시간/주간 한도는 메시지를 한 번 보낸 뒤에 나온다.** `rate_limits` 는 첫 API 응답 이후에만 statusLine 에 실린다. 세션을 새로 띄우면 잠시 비는데, 캐시는 직전 값을 유지하다가 새 값으로 바꾼다.
+- **Claude 의 5시간/주간 한도는 어느 프로젝트에서든 한 번 메시지를 보내면 그 뒤로 모든 레포에 표시된다.** `rate_limits` 는 첫 API 응답 이후에만 statusLine 에 실리는데, 한도 자체는 계정 단위라 `claude-limits.json` 에 따로 모아 공유한다. 모델·컨텍스트는 레포별로 유지된다.
 - **Claude 값은 Claude Code 를 한 번 띄워야 채워진다.** statusLine 이 그릴 때 캐시가 쓰인다. 1시간 지난 값은 버린다.
 - Codex 의 `43.4M tok` 은 현재 컨텍스트가 아니라 **스레드 누적 토큰**이다. Claude 의 `ctx 29%` 와 다른 의미다.
 - Codex 는 `thread_source='user'` 로 걸러 `codex-auto-review` 같은 서브에이전트 스레드를 제외한다.

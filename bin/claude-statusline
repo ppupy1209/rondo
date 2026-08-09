@@ -15,6 +15,15 @@ import time
 CACHE = os.path.join(
     os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "ai-tools"
 )
+LIMITS = os.path.join(CACHE, "claude-limits.json")
+BAR_CELLS = 8
+
+
+def battery(used_pct):
+    """남은 비율을 배터리처럼. used 72 -> 28% 남음."""
+    left = max(0.0, min(100.0, 100.0 - used_pct))
+    filled = int(round(left / 100 * BAR_CELLS))
+    return "\u2593" * filled + "\u2591" * (BAR_CELLS - filled), left
 
 
 def remaining(epoch):
@@ -46,9 +55,8 @@ def main():
     for key, label in (("five_hour", "5h"), ("seven_day", "wk")):
         window = limits.get(key)
         if window:
-            parts.append(
-                f"{label} {window['used_percentage']:.0f}% ({remaining(window['resets_at'])})"
-            )
+            bar, left = battery(window["used_percentage"])
+            parts.append(f"{label} {bar} {left:.0f}% ({remaining(window['resets_at'])})")
 
     print(" · ".join(parts))
     stash(data, used, limits)
@@ -61,14 +69,15 @@ def stash(data, used, limits):
         return
     path = os.path.join(CACHE, "claude.%s.json" % os.path.basename(project))
 
-    # rate_limits 는 첫 API 응답 전까지 비어 있다. 그 사이 렌더에서 이미 받아둔 값을
-    # 빈 값으로 덮으면 바에서 사라지므로, 새 값이 없으면 직전 값을 유지한다.
-    if not limits:
+    # 사용 한도는 계정 단위다. 프로젝트별 파일에 가두면 아직 메시지를 안 보낸
+    # 레포에서 안 보이므로 별도 파일에 공유한다. 빈 값으로 덮어쓰지 않는다.
+    if limits:
         try:
-            with open(path) as fh:
-                limits = json.load(fh).get("rate_limits") or {}
-        except (OSError, ValueError):
-            limits = {}
+            os.makedirs(CACHE, exist_ok=True)
+            with open(LIMITS, "w") as fh:
+                json.dump({"rate_limits": limits, "at": int(time.time())}, fh)
+        except OSError:
+            pass
 
     try:
         os.makedirs(CACHE, exist_ok=True)
