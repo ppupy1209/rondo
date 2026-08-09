@@ -137,6 +137,23 @@ class JournalTest(unittest.TestCase):
             journal.search(self.repo)
         self.assertEqual(caught.exception.code, "state_unsafe")
 
+    def test_metadata_read_retries_a_transient_windows_access_denial(self) -> None:
+        journal.record(self.repo, "note", "initial event")
+        meta = journal.journal_home(self.repo) / "meta.json"
+        real_read_text = Path.read_text
+        denied = True
+
+        def briefly_locked(path, *args, **kwargs):
+            nonlocal denied
+            if path == meta and denied:
+                denied = False
+                raise PermissionError("simulated Windows read race")
+            return real_read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", new=briefly_locked):
+            row = journal.record(self.repo, "note", "after transient denial")
+        self.assertEqual(row["content"], "after transient denial")
+
     def test_cron_and_one_shot_schedules_are_validated(self) -> None:
         base = int(time.time())
         next_minute = journal.next_cron("*/15 * * * *", base)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 import secrets
@@ -10,7 +11,7 @@ import time
 from pathlib import Path
 
 from .knowledge import KnowledgeError, _checked_text, _redacted
-from .paths import CACHE, atomic_json, read_json, repo_key
+from .paths import CACHE, atomic_json, repo_key
 
 MAX_EVENTS = 5_000
 MAX_JOBS = 100
@@ -71,9 +72,22 @@ def _prepare(root: Path) -> Path:
             if time.monotonic() >= deadline:
                 raise JournalError("state_unsafe") from None
             time.sleep(0.025)
-    value = read_json(meta)
-    if value.get("schema") != 1 or value.get("root") != expected:
-        raise JournalError("state_unsafe")
+    while True:
+        try:
+            value = json.loads(meta.read_text(encoding="utf-8"))
+        except (PermissionError, FileNotFoundError):
+            # A concurrent Windows replace can also deny the first read for a
+            # moment. Retry only access/disappearance races, never malformed
+            # or mismatched content.
+            if time.monotonic() >= deadline:
+                raise JournalError("state_unsafe") from None
+            time.sleep(0.025)
+            continue
+        except (OSError, ValueError):
+            raise JournalError("state_unsafe") from None
+        if value.get("schema") != 1 or value.get("root") != expected:
+            raise JournalError("state_unsafe")
+        break
     _private(meta)
 
     target = database_path(root)
