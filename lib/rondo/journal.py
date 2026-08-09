@@ -54,15 +54,26 @@ def _prepare(root: Path) -> Path:
         pass
 
     meta = directory / "meta.json"
-    if meta.is_symlink():
-        raise JournalError("state_unsafe")
     expected = str(root)
-    if meta.exists():
-        value = read_json(meta)
-        if value.get("root") != expected:
+    deadline = time.monotonic() + 5
+    while True:
+        if meta.is_symlink():
             raise JournalError("state_unsafe")
-    else:
-        atomic_json(meta, {"schema": 1, "root": expected})
+        if meta.exists():
+            break
+        try:
+            atomic_json(meta, {"schema": 1, "root": expected})
+            break
+        except PermissionError:
+            # Windows may reject replace() when another fresh process wins the
+            # same metadata publication race. Accept only its fully written,
+            # subsequently validated result; every other failure stays closed.
+            if time.monotonic() >= deadline:
+                raise JournalError("state_unsafe") from None
+            time.sleep(0.025)
+    value = read_json(meta)
+    if value.get("schema") != 1 or value.get("root") != expected:
+        raise JournalError("state_unsafe")
     _private(meta)
 
     target = database_path(root)

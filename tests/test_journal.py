@@ -118,6 +118,25 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(len({row["id"] for row in rows}), 40)
         self.assertEqual(len(journal.search(self.repo, limit=100)), 40)
 
+    def test_metadata_publish_accepts_only_a_valid_concurrent_winner(self) -> None:
+        real_atomic_json = journal.atomic_json
+
+        def publish_then_report_windows_race(path, data):
+            real_atomic_json(path, data)
+            raise PermissionError("simulated Windows replace race")
+
+        with mock.patch.object(
+            journal, "atomic_json", side_effect=publish_then_report_windows_race
+        ):
+            row = journal.record(self.repo, "note", "concurrent winner")
+        self.assertEqual(row["content"], "concurrent winner")
+
+        meta = journal.journal_home(self.repo) / "meta.json"
+        meta.write_text('{"schema": 1, "root": "wrong"}', encoding="utf-8")
+        with self.assertRaises(journal.JournalError) as caught:
+            journal.search(self.repo)
+        self.assertEqual(caught.exception.code, "state_unsafe")
+
     def test_cron_and_one_shot_schedules_are_validated(self) -> None:
         base = int(time.time())
         next_minute = journal.next_cron("*/15 * * * *", base)
