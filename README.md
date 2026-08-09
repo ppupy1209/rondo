@@ -173,7 +173,7 @@ Claude Code 는 `statusLine` 명령에 세션 JSON 을 stdin 으로 넘긴다. �
 `ai` 세션 최상단 1행. 5초마다 갱신. **열려 있는 패널만** 표시한다 — `zellij action dump-layout` 의 패널 이름을 읽어 거른다.
 
 ```
-claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h10m) wk ▓▓▓▓▓░░░ 64%(1d5h)   codex gpt-5.6-sol xhigh wk ▓▓▓▓▓▓▓░ 93%(6d21h)   gemini gemini-3.6-flash-high
+claude Sonnet 5 5h ▓░░░░░░░ 10%(1h53m) wk ▓▓▓▓▓░░░ 62%(1d6h)   codex gpt-5.6-sol xhigh wk ▓▓▓▓▓▓▓░ 93%(6d20h)   gemini gemini-3.6-flash-high 5h ▓▓▓▓▓▓▓▓ 100%(4h29m) wk ▓▓▓▓▓▓▓▓ 99%(1d4h)
 ```
 
 배터리 바는 **남은 양**이다. `5h ▓▓░░░░░░ 28%` 는 5시간 창에서 28% 남았고 2시간 26분 뒤 리셋된다는 뜻. 리셋 시각이 지난 창은 표시하지 않는다.
@@ -186,7 +186,7 @@ claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h10m) wk ▓▓▓▓▓░░�
 |---|---|---|
 | Claude | `claude-statusline` 이 남기는 `~/.cache/ai-tools/claude.<레포>.json` (모델·컨텍스트)<br>`claude-limits.json` (한도, 계정 단위 공유) | 모델 · 컨텍스트% · 5시간/주간 한도 |
 | Codex | `~/.codex/state_5.sqlite` 의 `threads`<br>`~/.codex/sessions/**/rollout-*.jsonl` 의 `rate_limits` | 모델 · reasoning effort · 남은 한도 |
-| Gemini (Antigravity) | `~/.gemini/antigravity-cli/conversations/*.db` | 모델만 |
+| Gemini (Antigravity) | 대화 DB `~/.gemini/antigravity-cli/conversations/*.db`<br>`agy -p "/usage"` 결과 캐시 | 모델 · 남은 한도 |
 | Kimi · Grok | 없음 | `-` |
 
 > **값이 `-` 로만 나온다면** 대개 둘 중 하나다.
@@ -201,7 +201,7 @@ claude Sonnet 5 5h ▓▓░░░░░░ 28%(2h10m) wk ▓▓▓▓▓░░�
 - Codex 는 `thread_source='user'` 로 걸러 `codex-auto-review` 같은 서브에이전트 스레드를 제외한다.
 - Codex 한도는 rollout 로그의 `rate_limits` 스냅샷에서 읽는다. 파일 꼬리 400KB 만 읽어 마지막 스냅샷을 쓴다. 창 개수는 요금제마다 다르다 — `primary`(주간) 만 있고 `secondary`(5시간) 가 없는 요금제도 있어서, 있는 창만 그린다.
 - SQLite 는 `mode=ro` 로 먼저 연다. `immutable=1` 을 먼저 쓰면 **WAL 을 통째로 무시해** 최근 세션이 안 보인다(codex DB 는 WAL 이고 `-wal` 이 수 MB). 잠겨서 실패할 때만 `immutable` 로 물러서고, 그래도 실패하면 마지막 성공값을 유지한다.
-- Gemini(Antigravity) 는 대화 DB 가 protobuf 라 모델명만 문자열로 긁는다. **사용 한도는 디스크에 남지 않는다** — `quota_manager` 가 실행 중에 새로 받아 메모리에만 둔다(로그에 `doRefreshQuota` 만 남고 값은 없음). 그래서 배터리 바가 없다.
+- Gemini(Antigravity) 는 대화 DB 가 protobuf 라 모델명만 문자열로 긁는다. 한도는 디스크에 안 남아서 **`agy -p "/usage"` 를 10분마다 백그라운드로 한 번 돌려** 캐시한다(호출에 8초쯤 걸려 바를 막지 않도록 별도 스레드). gemini 패널이 열려 있을 때만 돈다.
 - 상태 바 패널은 **입력 에코를 꺼 둔다**. zellij 에 '포커스 불가' 옵션이 없어 클릭 자체는 막지 못하지만, 클릭 후 타이핑해도 바가 밀리지 않는다.
 - Antigravity · Kimi · Grok 은 모델·토큰·한도를 로컬 파일에 남기지 않는다. Grok 은 사용량을 OpenTelemetry 로만 내보내고(자체 컬렉터 필요), 세션 중 `/cost` · `/context` 로만 볼 수 있다. 남기기 시작하면 `ai-status` 에 함수 하나 추가하면 된다.
 

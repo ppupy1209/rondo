@@ -5,11 +5,12 @@
 
   claude       statusLine 이 남긴 캐시 (모델) + 계정 단위 한도 캐시 (5시간/주간)
   codex        threads(모델) + rollout 로그의 rate_limits(남은 한도)
-  gemini       Antigravity(agy) 대화 DB 에서 모델명만. 사용량은 디스크에 안 남는다
+  gemini       대화 DB(모델) + `agy -p /usage` 결과 캐시(남은 한도)
   kimi·grok    로컬에 상태를 남기지 않음 — "-" 로 표시
 
 열려 있는 패널만 표시한다(zellij dump-layout 기준). 한 번만 출력하려면 --once.
 """
+import calendar
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import termios
 import time
 
@@ -27,6 +29,8 @@ LIMITS = os.path.join(CACHE, "claude-limits.json")
 CODEX_DB = os.path.expanduser("~/.codex/state_5.sqlite")
 CODEX_SESSIONS = os.path.expanduser("~/.codex/sessions")
 TAIL_BYTES = 400_000
+GEMINI_USAGE = os.path.join(CACHE, "gemini-usage.json")
+GEMINI_REFRESH = 600  # agy 호출이 8초쯤 걸려 자주 못 돈다
 AGY_DIR = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
 BAR_CELLS = 8
 STALE_SECONDS = 3600
@@ -197,6 +201,64 @@ def codex_field(root):
     return " ".join(bits)
 
 
+_gemini_lock = threading.Lock()
+
+
+def refresh_gemini_usage():
+    """`agy -p /usage` 로 남은 한도를 받아 캐시에 쓴다. 8초쯤 걸려 백그라운드로 돈다.
+
+    출력은 탭 구분: "Gemini Models\t Weekly Limit Remaining\t 99%\t <ISO 시각>"
+    남은 비율을 그대로 주므로 used 로 뒤집어 저장한다.
+    """
+    try:
+        out = subprocess.run(
+            ["agy", "-p", "/usage"], capture_output=True, text=True, timeout=120
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    windows = {}
+    for row in out.stdout.splitlines():
+        cols = [c.strip() for c in row.split("\t")]
+        if len(cols) < 4 or not cols[0].startswith("Gemini"):
+            continue
+        if "Five Hour" in cols[1]:
+            label = "5h"
+        elif "Weekly" in cols[1]:
+            label = "wk"
+        else:
+            continue
+        try:
+            left = float(cols[2].rstrip("%"))
+            # 출력은 UTC(Z). timegm 으로 변환해야 로컬 타임존·DST 에 안 흔들린다
+            resets = calendar.timegm(time.strptime(cols[3], "%Y-%m-%dT%H:%M:%SZ"))
+        except ValueError:
+            continue
+        windows[label] = {"used_percentage": 100.0 - left, "resets_at": resets}
+    if not windows:
+        return
+    try:
+        os.makedirs(CACHE, exist_ok=True)
+        with open(GEMINI_USAGE, "w") as fh:
+            json.dump({"windows": windows, "at": int(time.time())}, fh)
+    except OSError:
+        pass
+
+
+def gemini_usage():
+    try:
+        with open(GEMINI_USAGE) as fh:
+            cached = json.load(fh)
+    except (OSError, ValueError):
+        cached = {"windows": {}, "at": 0}
+    if time.time() - cached.get("at", 0) > GEMINI_REFRESH and not _gemini_lock.locked():
+        def worker():
+            with _gemini_lock:
+                refresh_gemini_usage()
+        threading.Thread(target=worker, daemon=True).start()
+    now = time.time()
+    return {k: v for k, v in cached["windows"].items() if v.get("resets_at", 0) > now}
+
+
 def gemini_field(_root):
     # ponytail: 대화 DB 가 protobuf blob 이라 모델명만 문자열로 긁는다.
     # 토큰·한도는 스키마를 알아야 하므로 생략. agy 가 평문 필드를 노출하면 교체.
@@ -212,7 +274,14 @@ def gemini_field(_root):
     except OSError:
         return None
     names = re.findall(rb"gemini-[0-9a-z.\-]+", blob)
-    return max((n.decode() for n in names), key=len) if names else None
+    bits = [max((n.decode() for n in names), key=len)] if names else []
+    windows = gemini_usage()
+    for label in ("5h", "wk"):
+        window = windows.get(label)
+        if window:
+            bar, left = battery(window["used_percentage"])
+            bits.append(f"{label} {bar} {left:.0f}%({until(window['resets_at'])})")
+    return " ".join(bits) or None
 
 
 AGENTS = [
