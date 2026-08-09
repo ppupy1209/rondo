@@ -3,19 +3,23 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-COMMANDS = {
-    "claude": (("claude", "--continue"), ("claude",)),
-    "codex": (("codex", "resume", "--last"), ("codex",)),
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from rondo import audience
+
+AGENTS = {"claude", "codex", "gemini", "kimi", "grok"}
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
 
 
-def executable(command: tuple[str, ...]) -> list[str]:
+def executable(command: tuple[str, ...] | list[str]) -> list[str]:
     binary = shutil.which(command[0]) or command[0]
     argv = [binary, *command[1:]]
     if os.name == "nt" and Path(binary).suffix.lower() in (".cmd", ".bat"):
@@ -34,23 +38,73 @@ def handoff_prompt(agent: str) -> str | None:
     return f"[Rondo resume] Read this handoff file and continue the current work: {path}"
 
 
+def kimi_agent_file(mode: str, rule: str) -> Path:
+    directory = CACHE_DIR / "audience"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = directory / f"kimi-{mode}.md"
+    content = (
+        "---\n"
+        f"name: rondo-{mode}\n"
+        "description: Kimi coding agent with Rondo explanation guidance\n"
+        "---\n\n"
+        "${base_prompt}\n\n"
+        f"{rule}\n"
+    )
+    temp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    temp.write_text(content, encoding="utf-8")
+    os.chmod(temp, 0o600)
+    temp.replace(target)
+    return target
+
+
+def session_commands(
+    agent: str, mode: str
+) -> tuple[list[str] | None, list[str], list[str] | None]:
+    rule = audience.instruction(mode)
+    if agent == "claude":
+        guidance = ["--append-system-prompt", rule] if rule else []
+        return ["claude", "--continue", *guidance], ["claude", *guidance], None
+    if agent == "codex":
+        guidance = (
+            ["-c", f"developer_instructions={json.dumps(rule, ensure_ascii=False)}"]
+            if rule else []
+        )
+        return ["codex", *guidance, "resume", "--last"], ["codex", *guidance], None
+    if agent == "gemini":
+        guidance = ["--prompt-interactive", audience.update_prompt(mode)] if rule else []
+        return None, ["agy", *guidance], None
+    if agent == "grok":
+        guidance = ["--rules", rule] if rule else []
+        return None, ["grok", *guidance], None
+    if rule:
+        return None, ["kimi", "--agent-file", str(kimi_agent_file(mode, rule))], ["kimi"]
+    return None, ["kimi"], None
+
+
 def run(agent: str, extra: list[str]) -> int:
-    resume, fresh = COMMANDS[agent]
+    mode = audience.selected(CONFIG_DIR)
+    resume, fresh, compatibility = session_commands(agent, mode)
     prompt = handoff_prompt(agent)
     tail = [*extra, *([prompt] if prompt else [])]
-    result = subprocess.run([*executable(resume), *tail])
-    if result.returncode == 1:
+    result = subprocess.run([*executable(resume or fresh), *tail])
+    if resume and result.returncode == 1:
         result = subprocess.run([*executable(fresh), *tail])
+    if compatibility and result.returncode == 1:
+        result = subprocess.run([*executable(compatibility), *tail])
 
     hook = shutil.which("handoff")
     if hook and os.name != "nt":
-        subprocess.run([hook, "Claude" if agent == "claude" else "Codex"], check=False)
+        label = {
+            "claude": "Claude", "codex": "Codex", "gemini": "Gemini",
+            "kimi": "Kimi", "grok": "Grok",
+        }[agent]
+        subprocess.run([hook, label], check=False)
     return result.returncode
 
 
 def main() -> int:
-    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        print("usage: rondo-agent-session claude|codex [args...]", file=sys.stderr)
+    if len(sys.argv) < 2 or sys.argv[1] not in AGENTS:
+        print("usage: rondo-agent-session claude|codex|gemini|kimi|grok [args...]", file=sys.stderr)
         return 2
     return run(sys.argv[1], sys.argv[2:])
 

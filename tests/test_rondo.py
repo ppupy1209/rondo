@@ -114,7 +114,24 @@ class RondoTests(unittest.TestCase):
         rondo["migrate_legacy_config"]()
         target = self.config / "rondo"
         self.assertEqual((target / "panels").read_text().strip(), "claude codex")
+        self.assertEqual((target / "audience").read_text().strip(), "default")
         self.assertEqual((target / "relay").read_text().strip(), "ready")
+
+    def test_noninteractive_setup_accepts_audience_environment(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["setup"].__globals__
+        environment = {
+            "RONDO_LANG": "ko",
+            "RONDO_AUDIENCE": "nondev",
+            "RONDO_PANELS": "claude",
+            "RONDO_RELAY": "ready",
+        }
+        with (
+            patch.dict(scope["os"].environ, environment, clear=False),
+            patch.dict(scope, {"installed": lambda _name: True}),
+        ):
+            rondo["setup"]()
+        self.assertEqual((self.config / "rondo" / "audience").read_text().strip(), "nondev")
 
     def test_layout_contains_only_known_commands(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -235,6 +252,66 @@ class RondoTests(unittest.TestCase):
             opener.assert_called_once_with(resume_agent="codex", handoff=packet)
             self.assertEqual(scope["os"].environ["RONDO_RESUME_AGENT"], "codex")
 
+    def test_proof_reviewer_opens_a_fresh_read_only_pane(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["start_proof_reviewer"].__globals__
+        packet = self.base / "proof.md"
+        packet.write_text("proof")
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.dict(scope, {"installed": lambda _name: True}),
+            patch.object(scope["shutil"], "which", return_value="/bin/codex"),
+            patch.object(scope["subprocess"], "run") as run,
+        ):
+            rondo["start_proof_reviewer"]("codex", packet, self.base)
+        command = run.call_args.args[0]
+        self.assertEqual(command[:5], ["zellij", "action", "new-pane", "--name", "proof-codex"])
+        self.assertIn("read-only", command)
+        self.assertIn(str(packet), command[-1])
+
+    def test_task_command_records_structured_verification_intent(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        from rondo import proof as proof_lib
+
+        repo = self.base / "repo"
+        repo.mkdir()
+        scope = rondo["task_command"].__globals__
+        with (
+            patch.object(proof_lib, "CACHE", self.cache / "rondo"),
+            patch.dict(scope, {"repo_root": lambda: repo}),
+        ):
+            result = rondo["task_command"]([
+                "Improve", "login", "errors",
+                "--accept", "Invalid passwords show an error",
+                "--avoid", "Do not change the API",
+                "--scope", "web",
+                "--check", "python -m unittest",
+            ])
+            task = proof_lib.load_task(repo)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(task["goal"], "Improve login errors")
+        self.assertEqual(task["acceptance"], ["Invalid passwords show an error"])
+        self.assertEqual(task["must_not"], ["Do not change the API"])
+        self.assertEqual(task["scope"], ["web"])
+        self.assertEqual(task["checks"], [["python", "-m", "unittest"]])
+
+    def test_audience_mode_is_saved_and_broadcast_to_open_panes(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        rondo["write_setting"]("panels", "claude codex")
+        scope = rondo["audience_command"].__globals__
+        sender = unittest.mock.Mock()
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.dict(scope, {"send_agent_message": sender}),
+        ):
+            rondo["audience_command"]("guided")
+
+        path = self.config / "rondo" / "audience"
+        self.assertEqual(path.read_text().strip(), "guided")
+        self.assertEqual([call.args[0] for call in sender.call_args_list], ["claude", "codex"])
+        self.assertTrue(all("Rondo audience update" in call.args[1][0] for call in sender.call_args_list))
+
     def test_lens_command_executes_the_companion_cli(self):
         rondo = load_script("rondo", self.config, self.cache)
         scope = rondo["open_lens"].__globals__
@@ -289,6 +366,24 @@ class AgentSessionTests(unittest.TestCase):
         ):
             self.assertEqual(self.runner["run"]("codex", []), 0)
         run.assert_called_once_with(["/bin/codex", "resume", "--last"])
+
+    def test_audience_guidance_uses_each_cli_native_entry_point(self):
+        commands = self.runner["session_commands"]
+        claude = commands("claude", "nondev")
+        codex = commands("codex", "nondev")
+        gemini = commands("gemini", "nondev")
+        kimi = commands("kimi", "nondev")
+        grok = commands("grok", "nondev")
+
+        self.assertIn("--append-system-prompt", claude[0])
+        self.assertTrue(any(value.startswith("developer_instructions=") for value in codex[0]))
+        self.assertIn("--prompt-interactive", gemini[1])
+        self.assertIn("--agent-file", kimi[1])
+        self.assertIn("--rules", grok[1])
+        agent_file = Path(kimi[1][-1])
+        self.assertIn("${base_prompt}", agent_file.read_text())
+        if os.name != "nt":
+            self.assertEqual(agent_file.stat().st_mode & 0o777, 0o600)
 
 
 class LensTests(unittest.TestCase):

@@ -1,4 +1,2 @@
 #!/bin/sh
-# grok 는 세션 종료 훅이 확인되지 않아 종료 직후 handoff 를 직접 실행한다.
-grok "$@"
-handoff Grok
+exec rondo-agent-session grok "$@"

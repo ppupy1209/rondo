@@ -108,13 +108,9 @@ function Write-AgentLauncher([string]$Name, [string]$Agent) {
 
 Write-AgentLauncher "claude-session" "claude"
 Write-AgentLauncher "codex-session" "codex"
-
-@{
-    "agy-session" = "agy"; "kimi-session" = "kimi"; "grok-session" = "grok"
-}.GetEnumerator() | ForEach-Object {
-    $content = "@echo off`r`ncall $($_.Value) %*`r`n"
-    [IO.File]::WriteAllText((Join-Path $Bin "$($_.Key).cmd"), $content, [Text.UTF8Encoding]::new($false))
-}
+Write-AgentLauncher "agy-session" "gemini"
+Write-AgentLauncher "kimi-session" "kimi"
+Write-AgentLauncher "grok-session" "grok"
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if (($userPath -split ";") -notcontains $Bin) {

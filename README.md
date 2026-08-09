@@ -10,9 +10,11 @@ It provides:
 
 - one persistent workspace per Git project;
 - interactive Korean / English setup and agent selection;
+- one explanation level shared by every agent pane;
 - a shared status bar for models, usage, and relay state;
 - visible prompts between agent panes through `rondo send`;
 - element-scoped frontend requests through Rondo Lens;
+- executable evidence and a risk-based human review queue through Rondo Proof;
 - opt-in Claude → Codex continuity at the usage limit.
 
 Rondo is local-first. It reads the files that each installed CLI already stores on your machine and does not add a hosted service, account, or API key.
@@ -55,14 +57,16 @@ Existing `ai-tools` installations are migrated on first run. The old `ai`, `ai-s
 ```sh
 cd ~/projects/my-project
 rondo             # open or attach to the project's persistent workspace
-rondo setup       # choose language, agents, and relay behavior
+rondo setup       # choose language, explanation level, agents, and relay behavior
+rondo audience    # change how every agent explains its results
 rondo add         # select and add another agent pane
 rondo send codex "Review the current diff"  # type and submit in the Codex pane
 rondo lens        # click a UI element and send its focused context
+rondo proof       # run checks and build a risk-based review packet
 rondo doctor      # diagnose dependencies and configuration
 ```
 
-`rondo setup` is a real selector: move with arrow keys, toggle agents with Space, and save with Enter. Agent names never need to be typed.
+`rondo setup` is a real selector: move with arrow keys, toggle agents with Space, and save with Enter. Agent names and explanation levels never need to be typed.
 
 ```text
 ┌────────────────────────────────────────────────────┐
@@ -76,6 +80,26 @@ rondo doctor      # diagnose dependencies and configuration
 ```
 
 The first selected agent gets the left half. Additional agents stack on the right. Detaching or closing the terminal does not stop the zellij session.
+
+## Audience-aware explanations
+
+Rondo gives every selected agent the same explanation level without changing engineering quality, permissions, or implementation behavior.
+
+| Level | Explanation style |
+|---|---|
+| `default` | Keep each agent's normal response style |
+| `nondev` | Start with the practical outcome, define jargon, and use a concrete example and simple flow |
+| `guided` | Assume general development knowledge, but explain the unfamiliar technology's role, mechanics, rationale, and a key tradeoff |
+
+Choose the level during setup or change it later:
+
+```sh
+rondo audience nondev
+rondo audience guided
+rondo audience default
+```
+
+Every agent pane started by Rondo receives the saved level automatically, including supported restored sessions. When `rondo audience` runs inside an active Rondo session, the update is also entered visibly into every open agent pane and applies to future replies. For unattended setup, use `RONDO_AUDIENCE=default|nondev|guided`.
 
 ## Visible agent delegation
 
@@ -104,6 +128,28 @@ Hover gives immediate element highlighting. Click selects, Esc cancels, and the 
 The packet includes a cropped screenshot around the selection, sanitized DOM and visible text, a small computed-style set, and accessibility metadata. Form values are removed from the DOM and masked during the screenshot. Cookies, browser storage, credentials, and full-page screenshots are never read. Localhost is the default boundary; remote pages require the explicit `--allow-remote` flag.
 
 Lens launches an isolated Chrome, Chromium, or Microsoft Edge profile and deletes that temporary profile when the selection ends. Set `RONDO_BROWSER=/path/to/browser` if the browser is not discovered automatically.
+
+## Rondo Proof
+
+Proof replaces a full-diff handoff with executable evidence and a queue containing only the decisions that still need a person.
+
+```sh
+rondo task "Improve login error messages" \
+  --accept "Invalid passwords show an error" \
+  --accept "Successful login still works" \
+  --avoid "Do not change the authentication API" \
+  --scope web
+
+rondo proof                    # run checks and build an evidence packet
+rondo review --budget 2m       # show highest-risk items that fit two minutes
+rondo proof --reviewer codex   # open a separate read-only Codex verifier
+```
+
+Rondo classifies changed files as low, medium, or high risk. Authentication, permissions, payments, migrations, security, deployment paths, and changes outside the declared scope are high risk. Documentation and test-only changes are low risk. Python unittest, npm test/lint, Gradle, Cargo, and Go checks are discovered from project files; add task-specific commands with `--check "command"`.
+
+The independent reviewer starts in a fresh pane without the implementer's conversation. Codex uses a read-only sandbox and Claude uses plan permissions. It is instructed to inspect the actual diff, challenge the evidence, and find the strongest counterexample without editing implementation code. `ready` means approval candidate, not automatic approval; sensitive changes always remain in the human queue.
+
+Task intent and proof packets stay under `~/.cache/rondo/proof/` with mode `0600` and are not committed. Check output can contain project data, so inspect a packet before sharing it outside the machine.
 
 ## Handoff and resume
 
@@ -139,8 +185,9 @@ The target pane receives a visible prompt pointing to `.rondo/handoff.md`. The f
 3. `rondo-status` reads local CLI state every five seconds and renders only the panes that are open.
 4. `rondo send` targets a pane by its Rondo name and submits a visible prompt through zellij.
 5. `rondo lens` captures one selected UI element into a private local packet and sends it only after confirmation.
-6. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
-7. At Claude's usage threshold, the continuity relay prepares a local packet and can send it to the existing Codex pane.
+6. `rondo proof` runs discovered checks, classifies risk, and keeps only unresolved decisions in the human review queue.
+7. Session wrappers and supported lifecycle hooks update an optional repository handoff log after an agent exits.
+8. At Claude's usage threshold, the continuity relay prepares a local packet and can send it to the existing Codex pane.
 
 The agents do not share a vendor chat session. They share the real project directory, Git state, a persistent terminal workspace, and a small provider-neutral continuity packet.
 
@@ -183,9 +230,13 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | Command | Purpose |
 |---|---|
 | `rondo` | Open or attach to the current project's session |
-| `rondo setup` | Choose language, panes, and relay mode |
+| `rondo setup` | Choose language, explanation level, panes, and relay mode |
+| `rondo audience [default\|nondev\|guided]` | Change how every agent explains its results |
 | `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
 | `rondo send <agent> <message>` | Type and submit a visible prompt in that agent's pane |
+| `rondo task <goal> [options]` | Record acceptance criteria, boundaries, scope, and checks |
+| `rondo proof [--reviewer agent]` | Run checks and build an independent review packet |
+| `rondo review [--budget 2m]` | Show the highest-risk human decisions within a time budget |
 | `rondo handoff [note]` | Create `.rondo/handoff.md` for another computer |
 | `rondo resume [claude\|codex]` | Open the workspace and deliver the handoff to one agent |
 | `rondo lens [URL]` | Click a UI element and send its focused context after confirmation |
@@ -209,18 +260,21 @@ The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/
 ```text
 ~/.config/rondo/
   language       ko | en
+  audience       default | nondev | guided
   panels         selected agent names
   relay          off | ready | auto
   threshold      remaining percentage (default: 1)
 
 ~/.cache/rondo/
   layout.kdl     generated zellij layout
+  audience/      private launch guidance for CLIs that use a local agent file
   claude.*       local display cache
   lens/          private element context packets and cropped screenshots
+  proof/         private task intent, evidence packets, and review queues
   relay/         private continuity packets and delivery logs
 ```
 
-For non-interactive setup, set `RONDO_LANG=ko|en`, `RONDO_PANELS=claude,codex,...`, and `RONDO_RELAY=off|ready|auto` before running `rondo setup`.
+For non-interactive setup, set `RONDO_LANG=ko|en`, `RONDO_AUDIENCE=default|nondev|guided`, `RONDO_PANELS=claude,codex,...`, and `RONDO_RELAY=off|ready|auto` before running `rondo setup`.
 
 No telemetry is included. Rondo does not store credentials. A relay excerpt can contain conversation text, so use `ready` mode when work must not cross providers without an explicit action.
 

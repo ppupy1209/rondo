@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -20,6 +21,8 @@ else:
     import tty
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from rondo import audience as audience_lib
 
 VERSION = "0.5.0"
 WINDOWS = os.name == "nt"
@@ -42,12 +45,19 @@ TEXT = {
         "usage": """사용법
   rondo                 이 프로젝트의 세션 열기 / 붙기
   rondo setup           언어·패널·자동 인계 설정
+  rondo audience [단계] 설명 수준 선택 (default|nondev|guided)
   rondo add [에이전트]   현재 세션에 패널 추가
   rondo send <에이전트> <메시지>
                         대상 패널에 메시지 입력·전송
   rondo handoff [메모]  다른 PC로 옮길 인계 파일 생성
   rondo resume [에이전트]
                         인계 파일로 Claude/Codex 작업 재개
+  rondo task "<목표>" [--accept 조건] [--avoid 조건]
+                        검증할 의도와 성공 조건 기록
+  rondo proof [--reviewer codex] [--no-checks]
+                        실행 증거·위험도·사람 판단 항목 생성
+  rondo review [--budget 2m]
+                        제한 시간 안에 볼 항목만 표시
   rondo lens [URL]      화면 요소를 클릭해 해당 맥락만 전달
   rondo race "<과제>"   같은 과제를 여러 에이전트에게 각자 worktree 에서
   rondo diff [에이전트]  race 결과 비교
@@ -67,6 +77,17 @@ TEXT = {
   Ctrl+o 다음 d         디태치 (세션은 계속 실행)
 """,
         "language_title": "언어를 선택하세요",
+        "audience_title": "설명을 어느 수준에 맞출까요?",
+        "audience_default": "기본",
+        "audience_default_desc": "각 에이전트의 평소 설명 방식 유지",
+        "audience_nondev": "비개발자",
+        "audience_nondev_desc": "쉬운 말, 예시, 흐름 중심으로 설명",
+        "audience_guided": "개발자 · 추가 설명",
+        "audience_guided_desc": "낯선 기술의 역할·원리·선택 이유 보강",
+        "audience": "설명 수준",
+        "audience_saved": "설명 수준을 {mode}(으)로 변경했습니다.",
+        "audience_applied": "열린 에이전트 패널 {count}개에도 새 기준을 전달했습니다.",
+        "audience_usage": "설명 수준: default | nondev | guided",
         "agent_title": "함께 실행할 코딩 에이전트를 선택하세요",
         "agent_hint": "↑/↓ 이동 · Space 선택 · Enter 저장",
         "installed": "설치됨",
@@ -87,7 +108,7 @@ TEXT = {
         "unknown": "지원하지 않는 에이전트: {name}",
         "not_installed": "{name}이(가) 설치되지 않았습니다. `rondo doctor`로 확인하세요.",
         "need_zellij": "zellij 세션 안에서 실행하세요. 먼저 `rondo`를 실행하면 됩니다.",
-        "need_tty": "대화형 터미널이 필요합니다. 자동 설정은 RONDO_LANG, RONDO_PANELS, RONDO_RELAY 환경변수를 사용하세요.",
+        "need_tty": "대화형 터미널이 필요합니다. 자동 설정은 RONDO_LANG, RONDO_AUDIENCE, RONDO_PANELS, RONDO_RELAY 환경변수를 사용하세요.",
         "bad_config": "패널 설정이 비었거나 잘못되었습니다. `rondo setup`을 다시 실행하세요.",
         "relay_status": "인계 모드: {mode} · 임계치: 남은 사용량 {threshold}%",
         "relay_packet": "대기 중인 인계: {path}",
@@ -134,16 +155,38 @@ TEXT = {
         "handoff_missing": "인계 파일이 없습니다. 먼저 `rondo handoff \"다음 작업\"`을 실행하세요.",
         "resume_agent": "작업을 이어갈 에이전트를 선택하세요",
         "resume_unsupported": "resume은 현재 Claude와 Codex를 지원합니다: {name}",
+        "task_usage": "사용법: rondo task \"<목표>\" [--accept 조건] [--avoid 조건] [--scope 경로] [--check 명령]",
+        "task_saved": "검증 목표를 저장했습니다 · 성공 조건 {acceptance}개 · 금지 조건 {must_not}개",
+        "proof_title": "Rondo Proof · {verdict}",
+        "proof_ready": "승인 후보",
+        "proof_review": "사람 검토 필요",
+        "proof_checks": "검증 {passed}개 통과 · {failed}개 미해결",
+        "proof_risk": "변경 {files}개 · 고위험 {high} · 중간 {medium} · 낮음 {low}",
+        "proof_human": "사람 판단 항목 {count}개",
+        "proof_packet": "증거 패킷: {path}",
+        "proof_reviewer_started": "독립 {name} reviewer를 읽기 전용 패널에서 시작했습니다.",
+        "proof_reviewer_usage": "reviewer는 claude 또는 codex만 지원합니다: {name}",
+        "proof_missing": "Proof가 없습니다. 먼저 `rondo proof`를 실행하세요.",
+        "review_title": "검토 예산 {budget}초 · 우선 확인",
+        "review_empty": "필수 사람 검토 항목이 없습니다. 실행 증거 패킷만 확인하면 됩니다.",
+        "review_deferred": "시간 예산 밖의 항목 {count}개",
     },
     "en": {
         "usage": """Usage
   rondo                 Open or attach to this project's session
   rondo setup           Configure language, panes, and continuity relay
+  rondo audience [mode] Choose explanation level (default|nondev|guided)
   rondo add [agent]     Add a pane to the current session
   rondo send <agent> <message>
                         Type and submit a message in an agent pane
   rondo handoff [note]  Create a Git-portable handoff file
   rondo resume [agent]  Resume it in Claude or Codex
+  rondo task "<goal>" [--accept condition] [--avoid condition]
+                        Record intent and acceptance criteria
+  rondo proof [--reviewer codex] [--no-checks]
+                        Build evidence, risk, and human decisions
+  rondo review [--budget 2m]
+                        Show only what fits the review budget
   rondo lens [URL]      Click a UI element and send its focused context
   rondo language        Switch between English and Korean
   rondo relay [mode]    Show or change Claude → Codex relay mode
@@ -158,6 +201,17 @@ Inside a session
   Ctrl+o then d         Detach (the session keeps running)
 """,
         "language_title": "Choose a language",
+        "audience_title": "How should explanations be adapted?",
+        "audience_default": "Default",
+        "audience_default_desc": "Keep each agent's normal explanation style",
+        "audience_nondev": "Non-developer",
+        "audience_nondev_desc": "Use plain language, examples, and simple flows",
+        "audience_guided": "Developer · guided",
+        "audience_guided_desc": "Add roles, mechanics, rationale, and tradeoffs",
+        "audience": "Explanation level",
+        "audience_saved": "Explanation level changed to {mode}.",
+        "audience_applied": "Delivered the new guidance to {count} open agent pane(s).",
+        "audience_usage": "Explanation level: default | nondev | guided",
         "agent_title": "Choose coding agents to run together",
         "agent_hint": "↑/↓ move · Space toggle · Enter save",
         "installed": "installed",
@@ -178,7 +232,7 @@ Inside a session
         "unknown": "Unsupported agent: {name}",
         "not_installed": "{name} is not installed. Run `rondo doctor` for details.",
         "need_zellij": "Run this inside a zellij session. Start with `rondo` first.",
-        "need_tty": "An interactive terminal is required. For automation, set RONDO_LANG, RONDO_PANELS, and RONDO_RELAY.",
+        "need_tty": "An interactive terminal is required. For automation, set RONDO_LANG, RONDO_AUDIENCE, RONDO_PANELS, and RONDO_RELAY.",
         "bad_config": "The pane configuration is empty or invalid. Run `rondo setup` again.",
         "relay_status": "Relay mode: {mode} · threshold: {threshold}% remaining",
         "relay_packet": "Pending relay: {path}",
@@ -225,6 +279,21 @@ Inside a session
         "handoff_missing": "No handoff file exists. Run `rondo handoff \"next task\"` first.",
         "resume_agent": "Choose an agent to continue the work",
         "resume_unsupported": "Resume currently supports Claude and Codex: {name}",
+        "task_usage": "Usage: rondo task \"<goal>\" [--accept condition] [--avoid condition] [--scope path] [--check command]",
+        "task_saved": "Saved verification intent · {acceptance} acceptance · {must_not} constraints",
+        "proof_title": "Rondo Proof · {verdict}",
+        "proof_ready": "approval candidate",
+        "proof_review": "human review required",
+        "proof_checks": "{passed} checks passed · {failed} unresolved",
+        "proof_risk": "{files} files · high {high} · medium {medium} · low {low}",
+        "proof_human": "{count} human decision(s)",
+        "proof_packet": "Evidence packet: {path}",
+        "proof_reviewer_started": "Started an independent {name} reviewer in a read-only pane.",
+        "proof_reviewer_usage": "Reviewer supports claude or codex: {name}",
+        "proof_missing": "No proof exists. Run `rondo proof` first.",
+        "review_title": "Review budget {budget}s · inspect first",
+        "review_empty": "No mandatory human-review item. Inspect the evidence packet only.",
+        "review_deferred": "{count} item(s) outside the time budget",
     },
 }
 
@@ -259,7 +328,7 @@ def t(key: str, **values: object) -> str:
 def write_setting(name: str, value: str) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     target = CONFIG_DIR / name
-    temp = target.with_suffix(".tmp")
+    temp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     temp.write_text(value.rstrip() + "\n")
     os.chmod(temp, 0o600)
     temp.replace(target)
@@ -276,6 +345,7 @@ def migrate_legacy_config() -> None:
     if panels:
         write_setting("panels", " ".join(panels))
         write_setting("language", system_language())
+        write_setting("audience", "default")
         write_setting("relay", "ready")
         write_setting("threshold", "1")
 
@@ -389,6 +459,14 @@ def relay_options() -> list[tuple[str, str]]:
     return values
 
 
+def audience_options() -> list[tuple[str, str]]:
+    return [
+        ("default", f"{t('audience_default')} — {t('audience_default_desc')}"),
+        ("nondev", f"{t('audience_nondev')} — {t('audience_nondev_desc')}"),
+        ("guided", f"{t('audience_guided')} — {t('audience_guided_desc')}"),
+    ]
+
+
 def setup() -> None:
     global LANGUAGE
     migrate_legacy_config()
@@ -401,6 +479,17 @@ def setup() -> None:
             [("ko", "한국어"), ("en", "English")],
             0 if LANGUAGE == "ko" else 1,
         )
+
+    requested_audience = os.environ.get("RONDO_AUDIENCE", "").lower()
+    current_audience = audience_lib.selected(CONFIG_DIR)
+    if requested_audience in audience_lib.MODES:
+        audience = requested_audience
+    elif not (sys.stdin.isatty() and sys.stdout.isatty()):
+        audience = current_audience
+    else:
+        options = audience_options()
+        default = next(i for i, item in enumerate(options) if item[0] == current_audience)
+        audience = choose_one(t("audience_title"), options, default)
 
     saved = set(read_setting("panels").split())
     defaults = saved or {name for name in DEFAULT_AGENTS if installed(name)}
@@ -421,11 +510,13 @@ def setup() -> None:
         raise RuntimeError(t("select_auto_no_codex"))
 
     write_setting("language", LANGUAGE)
+    write_setting("audience", audience)
     write_setting("panels", " ".join(panels))
     write_setting("relay", relay)
     write_setting("threshold", "1")
     print(f"✓ {t('saved')}")
     print(f"  {t('language')}: {'한국어' if LANGUAGE == 'ko' else 'English'}")
+    print(f"  {t('audience')}: {audience}")
     print(f"  {t('panels')}: {' '.join(panels)}")
     print(f"  {t('relay')}: {relay}")
     print(t("login"))
@@ -662,6 +753,29 @@ def change_language() -> None:
     print(f"✓ {t('language')}: {'한국어' if selected == 'ko' else 'English'}")
 
 
+def audience_command(mode: str | None) -> None:
+    if mode is None:
+        current = audience_lib.selected(CONFIG_DIR)
+        options = audience_options()
+        default = next(i for i, item in enumerate(options) if item[0] == current)
+        mode = choose_one(t("audience_title"), options, default)
+    if mode not in audience_lib.MODES:
+        raise RuntimeError(t("audience_usage"))
+    write_setting("audience", mode)
+    print(t("audience_saved", mode=mode))
+
+    delivered = 0
+    if os.environ.get("ZELLIJ_SESSION_NAME"):
+        for name in configured_panels():
+            try:
+                send_agent_message(name, [audience_lib.update_prompt(mode)])
+            except RuntimeError:
+                continue
+            delivered += 1
+    if delivered:
+        print(t("audience_applied", count=delivered))
+
+
 def relay_index() -> dict | None:
     key = hashlib.sha256(str(repo_root().resolve()).encode()).hexdigest()[:16]
     index = CACHE_DIR / "relay" / key / "pending.json"
@@ -795,6 +909,159 @@ def resume_command(name: str | None) -> None:
     os.environ["RONDO_HANDOFF_FILE"] = str(handoff)
     os.environ["RONDO_LANG"] = LANGUAGE
     open_session(resume_agent=name, handoff=handoff)
+
+
+def _command_options(
+    args: list[str], valued: set[str], switches: set[str] | None = None
+) -> tuple[list[str], dict[str, list[str]], set[str]]:
+    bare: list[str] = []
+    values = {name: [] for name in valued}
+    enabled: set[str] = set()
+    switches = switches or set()
+    index = 0
+    while index < len(args):
+        value = args[index]
+        if value in valued:
+            if index + 1 >= len(args):
+                raise ValueError(f"{value} requires a value")
+            values[value].append(args[index + 1])
+            index += 2
+        elif value in switches:
+            enabled.add(value)
+            index += 1
+        elif value.startswith("--"):
+            raise ValueError(f"unknown option: {value}")
+        else:
+            bare.append(value)
+            index += 1
+    return bare, values, enabled
+
+
+def task_command(args: list[str]) -> int:
+    from rondo import proof as proof_lib
+
+    try:
+        bare, values, _ = _command_options(
+            args, {"--accept", "--avoid", "--scope", "--check"}
+        )
+        checks = [shlex.split(value, posix=not WINDOWS) for value in values["--check"]]
+        task = proof_lib.record_task(
+            repo_root(),
+            " ".join(bare),
+            acceptance=values["--accept"],
+            must_not=values["--avoid"],
+            scope=values["--scope"],
+            checks=checks,
+        )
+    except ValueError:
+        print(t("task_usage"), file=sys.stderr)
+        return 1
+    print(t(
+        "task_saved",
+        acceptance=len(task["acceptance"]),
+        must_not=len(task["must_not"]),
+    ))
+    return 0
+
+
+def _reviewer_prompt(packet: Path) -> str:
+    if LANGUAGE == "ko":
+        return (
+            "[Rondo Proof · 독립 검증] 구현 코드를 수정하지 마세요. 증거 패킷과 실제 diff를 "
+            "읽고 목표·성공 조건·금지 조건을 독립적으로 검증하세요. 가장 강한 반례부터 찾고, "
+            f"확인되지 않은 항목은 통과로 간주하지 말고 결과를 이 패널에 표시하세요: {packet}"
+        )
+    return (
+        "[Rondo Proof · independent verification] Do not edit implementation code. Read the "
+        "evidence packet and actual diff, verify the goal, acceptance criteria, and constraints, "
+        "look for the strongest counterexample first, and never pass unverified claims. Show the "
+        f"result in this pane: {packet}"
+    )
+
+
+def start_proof_reviewer(name: str, packet: Path, root: Path) -> None:
+    if name not in ("claude", "codex"):
+        raise RuntimeError(t("proof_reviewer_usage", name=name))
+    if not installed(name):
+        raise RuntimeError(t("not_installed", name=name))
+    if not os.environ.get("ZELLIJ_SESSION_NAME"):
+        raise RuntimeError(t("need_zellij"))
+
+    binary = shutil.which(AGENTS[name][1]) or AGENTS[name][1]
+    prompt = _reviewer_prompt(packet)
+    vendor_args = (
+        ["-s", "read-only", prompt]
+        if name == "codex"
+        else ["--permission-mode", "plan", prompt]
+    )
+    command = [binary, *vendor_args]
+    if WINDOWS and Path(binary).suffix.lower() in (".cmd", ".bat"):
+        command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *command]
+    subprocess.run(
+        [
+            "zellij", "action", "new-pane", "--name", f"proof-{name}",
+            "--cwd", str(root), "--", *command,
+        ],
+        check=True,
+    )
+    print(t("proof_reviewer_started", name=name))
+
+
+def proof_command(args: list[str]) -> int:
+    from rondo import proof as proof_lib
+
+    try:
+        bare, values, switches = _command_options(
+            args, {"--reviewer"}, {"--no-checks"}
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from None
+    if bare:
+        raise RuntimeError(f"unknown proof argument: {' '.join(bare)}")
+
+    root = repo_root()
+    proof = proof_lib.build(root, run_checks="--no-checks" not in switches)
+    summary = proof["summary"]
+    verdict = t("proof_ready") if summary["verdict"] == "ready" else t("proof_review")
+    print(t("proof_title", verdict=verdict))
+    print("  " + t("proof_checks", passed=summary["passed"], failed=summary["failed"]))
+    print("  " + t(
+        "proof_risk", files=summary["files"], high=summary["high"],
+        medium=summary["medium"], low=summary["low"],
+    ))
+    print("  " + t("proof_human", count=len(proof["human"])))
+    print("  " + t("proof_packet", path=proof["packet"]))
+
+    reviewers = values["--reviewer"]
+    if reviewers:
+        start_proof_reviewer(reviewers[-1], Path(proof["packet"]), root)
+    return int(summary["failed"] > 0)
+
+
+def review_command(args: list[str]) -> int:
+    from rondo import proof as proof_lib
+
+    try:
+        bare, values, _ = _command_options(args, {"--budget"})
+        if bare:
+            raise ValueError("unexpected argument")
+        budget = proof_lib.parse_budget(values["--budget"][-1]) if values["--budget"] else 120
+    except ValueError:
+        raise RuntimeError("review usage: rondo review [--budget 2m]") from None
+    proof = proof_lib.latest(repo_root())
+    if not proof:
+        raise RuntimeError(t("proof_missing"))
+    selected, deferred = proof_lib.review_queue(proof, budget)
+    print(t("review_title", budget=budget))
+    if not selected:
+        print(f"  ✓ {t('review_empty')}")
+    for index, item in enumerate(selected, 1):
+        mark = "!" if item["level"] == "high" else "·"
+        print(f"  {index}. {mark} {item['label']}  ~{item['seconds']}s")
+    if deferred:
+        print("  " + t("review_deferred", count=len(deferred)))
+    print("  " + t("proof_packet", path=proof["packet"]))
+    return 0
 
 
 def open_lens(args: list[str]) -> None:
@@ -1133,6 +1400,12 @@ def main() -> int:
         return handoff_command(args[1:])
     elif command == "resume":
         resume_command(args[1] if len(args) > 1 else None)
+    elif command == "task":
+        return task_command(args[1:])
+    elif command == "proof":
+        return proof_command(args[1:])
+    elif command == "review":
+        return review_command(args[1:])
     elif command == "lens":
         open_lens(args[1:])
     elif command == "race":
@@ -1147,6 +1420,8 @@ def main() -> int:
         return undo_command(args[1:])
     elif command in ("language", "lang"):
         change_language()
+    elif command == "audience":
+        audience_command(args[1] if len(args) > 1 else None)
     elif command == "relay":
         relay_command(args[1] if len(args) > 1 else None)
     elif command == "continue":
