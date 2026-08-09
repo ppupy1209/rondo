@@ -87,7 +87,7 @@ if (-not $Zellij -and -not (Test-Path (Join-Path $Bin "zellij.exe"))) {
 function Write-PythonLauncher([string]$Name, [string]$Script) {
     $target = Join-Path $Bin "$Name.cmd"
     $source = Join-Path $Repo "bin\$Script"
-    $content = "@echo off`r`nchcp 65001 >nul`r`n`"$Python`" `"$source`" %*`r`n"
+    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`n`"$Python`" `"$source`" %*`r`n"
     [IO.File]::WriteAllText($target, $content, [Text.UTF8Encoding]::new($false))
 }
 
@@ -102,7 +102,7 @@ function Write-PythonLauncher([string]$Name, [string]$Script) {
 function Write-AgentLauncher([string]$Name, [string]$Agent) {
     $target = Join-Path $Bin "$Name.cmd"
     $source = Join-Path $Repo "bin\rondo-agent-session"
-    $content = "@echo off`r`nchcp 65001 >nul`r`n`"$Python`" `"$source`" $Agent %*`r`n"
+    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`n`"$Python`" `"$source`" $Agent %*`r`n"
     [IO.File]::WriteAllText($target, $content, [Text.UTF8Encoding]::new($false))
 }
 
