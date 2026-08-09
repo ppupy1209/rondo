@@ -1,61 +1,37 @@
 #!/usr/bin/env python3
-"""Rondo zellij status bar — models, usage, and continuity relay.
+"""zellij 상단 바 — 패널별 모델과 남은 사용량.
 
-각 CLI 가 로컬에 남기는 것만 읽는다. 자격증명으로 API 를 호출하지 않는다.
+렌더러다. 벤더 경로·스키마는 하나도 몰라야 한다 — lib/rondo/adapters 가 안다.
+여기서 하는 일은 Snapshot 을 배터리 바와 문자열로 그리고, 열려 있는 패널만 고르고,
+폭에 맞춰 자르는 것뿐이다.
 
-  claude       statusLine 이 남긴 캐시 (모델) + 계정 단위 한도 캐시 (5시간/주간)
-  codex        threads(모델) + rollout 로그의 rate_limits(남은 한도)
-  gemini       대화 DB(모델) + `agy -p /usage` 결과 캐시(남은 한도)
-  kimi·grok    로컬에 상태를 남기지 않음 — "-" 로 표시
-
-열려 있는 패널만 표시한다(zellij dump-layout 기준). 한 번만 출력하려면 --once.
+한 번만 출력하려면 --once.
 """
-import calendar
-import hashlib
-import json
 import os
+import pathlib
 import re
 import shutil
-import sqlite3
 import subprocess
 import sys
-import threading
-import termios
 import time
 
-CACHE = os.path.join(
-    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "rondo"
-)
-CONFIG = os.path.join(
-    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "rondo"
-)
-LIMITS = os.path.join(CACHE, "claude-limits.json")
-CODEX_DB = os.path.expanduser("~/.codex/state_5.sqlite")
-CODEX_SESSIONS = os.path.expanduser("~/.codex/sessions")
-TAIL_BYTES = 400_000
-GEMINI_USAGE = os.path.join(CACHE, "gemini-usage.json")
-GEMINI_REFRESH = 600  # agy 호출이 8초쯤 걸려 자주 못 돈다
-AGY_DIR = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
+try:
+    import termios
+except ImportError:  # Windows ConPTY
+    termios = None
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "lib"))
+
+from rondo.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter  # noqa: E402
+from rondo.paths import CACHE, read_json, repo_key, setting  # noqa: E402
+
 BAR_CELLS = 8
-STALE_SECONDS = 3600
 STALE_LIMITS = 120  # 이 초를 넘으면 한도 옆에 나이를 붙인다
 INTERVAL = 5
 
 # 읽기에 실패한 틱에서 값이 사라지지 않도록 마지막 성공값을 들고 있는다.
 # DB 가 쓰기 중이면 열기가 실패해 바가 깜빡이던 문제를 막는다.
 LAST = {}
-
-
-def setting(name, default=""):
-    try:
-        with open(os.path.join(CONFIG, name)) as fh:
-            return fh.read().strip()
-    except OSError:
-        return default
-
-
-def repo_key(root):
-    return hashlib.sha256(os.path.realpath(root).encode()).hexdigest()[:16]
 
 
 def repo_root():
@@ -71,35 +47,14 @@ def repo_root():
     return os.getcwd()
 
 
-def query(path, sql, args=()):
-    """읽기 전용으로 연다.
-
-    immutable=1 을 먼저 쓰면 안 된다 — WAL 을 통째로 무시해서 최근 커밋이 안 보인다
-    (codex DB 는 WAL 이고 -wal 이 수 MB 다). 잠겨서 mode=ro 가 실패할 때만
-    immutable 로 물러선다.
-    """
-    if not os.path.exists(path):
-        return None
-    for mode in ("mode=ro", "immutable=1"):
-        try:
-            con = sqlite3.connect("file:%s?%s" % (path, mode), uri=True, timeout=1)
-            row = con.execute(sql, args).fetchone()
-            con.close()
-            return row
-        except sqlite3.Error:
-            continue
-    return None
-
-
 def short_model(name):
     return (name or "-").replace("claude-", "").replace("-latest", "")
 
 
-def battery(used_pct):
-    """남은 비율을 배터리처럼. used 72 -> 28% 남음."""
-    left = max(0.0, min(100.0, 100.0 - used_pct))
-    filled = int(round(left / 100 * BAR_CELLS))
-    return "▓" * filled + "░" * (BAR_CELLS - filled), left
+def battery(remaining):
+    """남은 비율을 배터리처럼. 어댑터가 이미 remaining 으로 맞춰 준다."""
+    filled = int(round(max(0.0, min(100.0, remaining)) / 100 * BAR_CELLS))
+    return "▓" * filled + "░" * (BAR_CELLS - filled)
 
 
 def until(epoch):
@@ -110,221 +65,33 @@ def until(epoch):
     return f"{hours}h{mins:02d}m" if hours else f"{mins}m"
 
 
-def claude_limits():
-    """사용 한도는 계정 단위다. 어느 프로젝트에서 받았든 공유 파일에서 읽는다.
-
-    Claude Code 가 statusLine 을 그릴 때만 갱신되므로, 패널이 놀고 있으면 값이 낡는다.
-    (한도, 캐시가 쓰인 뒤 흐른 초) 를 돌려주고 낡으면 화면에 나이를 붙인다.
-    """
-    try:
-        with open(LIMITS) as fh:
-            cached = json.load(fh)
-    except (OSError, ValueError):
-        return {}, 0
-    now = time.time()
-    limits = {
-        k: v for k, v in (cached.get("rate_limits") or {}).items()
-        if v.get("resets_at", 0) > now
-    }
-    return limits, now - cached.get("at", now)
-
-
-def claude_field(root):
-    limits, age = claude_limits()
-    try:
-        with open(os.path.join(CACHE, "claude.%s.json" % repo_key(root))) as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        data = {}
-    # 다른 레포의 동명 프로젝트이거나 오래된 값이면 모델은 쓰지 않는다
-    if data.get("project") != root or time.time() - data.get("at", 0) > STALE_SECONDS:
-        data = {}
-
-    bits = [short_model(data["model"])] if data.get("model") else []
-    for key, label in (("five_hour", "5h"), ("seven_day", "wk")):
-        window = limits.get(key)
-        if window:
-            bar, left = battery(window["used_percentage"])
-            bits.append(f"{label} {bar} {left:.0f}%({until(window['resets_at'])})")
-    # 실제 잔량과 어긋나 보일 수 있으니 값이 낡았으면 언제 기준인지 밝힌다
-    if limits and age > STALE_LIMITS:
-        bits.append("%dm전" % (age // 60))
-    return " ".join(bits) or None
-
-
-def newest_rollout():
-    """~/.codex/sessions/<년>/<월>/<일>/*.jsonl 중 가장 최근 파일."""
-    path = CODEX_SESSIONS
-    try:
-        for _ in range(3):
-            names = sorted(os.listdir(path))
-            if not names:
-                return None
-            path = os.path.join(path, names[-1])
-        files = [os.path.join(path, f) for f in os.listdir(path) if f.endswith(".jsonl")]
-    except OSError:
-        return None
-    return max(files, key=os.path.getmtime) if files else None
-
-
-def codex_limits():
-    """rollout 에 남는 rate_limits 스냅샷. 계정 단위라 프로젝트를 안 따진다.
-
-    파일이 커질 수 있어 꼬리만 읽고 마지막 스냅샷을 쓴다.
-    """
-    path = newest_rollout()
-    if not path:
-        return []
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            fh.seek(max(0, fh.tell() - TAIL_BYTES))
-            blob = fh.read().decode("utf-8", "replace")
-    except OSError:
-        return []
-    key = '"rate_limits":'
-    at = blob.rfind(key)
-    if at < 0:
-        return []
-    try:
-        snapshot, _ = json.JSONDecoder().raw_decode(blob[at + len(key):])
-    except ValueError:
-        return []
-
-    now = time.time()
-    windows = []
-    for slot in ("secondary", "primary"):  # 짧은 창을 앞에 둔다
-        window = snapshot.get(slot)
-        if not window or window.get("resets_at", 0) <= now:
-            continue
-        minutes = window.get("window_minutes") or 0
-        if minutes >= 10080:
-            label = "wk"
-        elif minutes >= 60:
-            label = f"{minutes // 60}h"
-        else:
-            label = f"{minutes}m"
-        windows.append((label, window["used_percent"], window["resets_at"]))
-    return windows
-
-
-def codex_field(root):
-    # thread_source='user' 로 서브에이전트(auto-review 등) 스레드를 제외한다
-    row = query(
-        CODEX_DB,
-        "SELECT model, reasoning_effort FROM threads "
-        "WHERE cwd = ? AND thread_source = 'user' ORDER BY updated_at_ms DESC LIMIT 1",
-        (root,),
-    )
-    if not row:
-        return None
-    model, effort = row
-    bits = [short_model(model)]
-    if effort:
-        bits.append(effort)
-    for label, used_pct, resets_at in codex_limits():
-        bar, left = battery(used_pct)
-        bits.append(f"{label} {bar} {left:.0f}%({until(resets_at)})")
-    return " ".join(bits)
-
-
-_gemini_lock = threading.Lock()
-
-
-def refresh_gemini_usage():
-    """`agy -p /usage` 로 남은 한도를 받아 캐시에 쓴다. 8초쯤 걸려 백그라운드로 돈다.
-
-    출력은 탭 구분: "Gemini Models\t Weekly Limit Remaining\t 99%\t <ISO 시각>"
-    남은 비율을 그대로 주므로 used 로 뒤집어 저장한다.
-    """
-    try:
-        out = subprocess.run(
-            ["agy", "-p", "/usage"], capture_output=True, text=True, timeout=120
+def render(snapshot):
+    """Snapshot -> 한 패널 몫의 문자열. 모든 벤더가 이 함수 하나를 지난다."""
+    bits = [short_model(snapshot.model)] if snapshot.model else []
+    windows = snapshot.live_windows()
+    for window in windows:
+        bits.append(
+            f"{window.label} {battery(window.remaining)} "
+            f"{window.remaining:.0f}%({until(window.resets_at)})"
         )
-    except (OSError, subprocess.SubprocessError):
-        return
-    windows = {}
-    for row in out.stdout.splitlines():
-        cols = [c.strip() for c in row.split("\t")]
-        if len(cols) < 4 or not cols[0].startswith("Gemini"):
-            continue
-        if "Five Hour" in cols[1]:
-            label = "5h"
-        elif "Weekly" in cols[1]:
-            label = "wk"
-        else:
-            continue
-        try:
-            left = float(cols[2].rstrip("%"))
-            # 출력은 UTC(Z). timegm 으로 변환해야 로컬 타임존·DST 에 안 흔들린다
-            resets = calendar.timegm(time.strptime(cols[3], "%Y-%m-%dT%H:%M:%SZ"))
-        except ValueError:
-            continue
-        windows[label] = {"used_percentage": 100.0 - left, "resets_at": resets}
-    if not windows:
-        return
-    try:
-        os.makedirs(CACHE, exist_ok=True)
-        with open(GEMINI_USAGE, "w") as fh:
-            json.dump({"windows": windows, "at": int(time.time())}, fh)
-    except OSError:
-        pass
-
-
-def gemini_usage():
-    try:
-        with open(GEMINI_USAGE) as fh:
-            cached = json.load(fh)
-    except (OSError, ValueError):
-        cached = {"windows": {}, "at": 0}
-    if time.time() - cached.get("at", 0) > GEMINI_REFRESH and not _gemini_lock.locked():
-        def worker():
-            with _gemini_lock:
-                refresh_gemini_usage()
-        threading.Thread(target=worker, daemon=True).start()
-    now = time.time()
-    return {k: v for k, v in cached["windows"].items() if v.get("resets_at", 0) > now}
-
-
-def gemini_field(_root):
-    # ponytail: 대화 DB 가 protobuf blob 이라 모델명만 문자열로 긁는다.
-    # 토큰·한도는 스키마를 알아야 하므로 생략. agy 가 평문 필드를 노출하면 교체.
-    try:
-        dbs = [os.path.join(AGY_DIR, f) for f in os.listdir(AGY_DIR) if f.endswith(".db")]
-    except OSError:
-        return None
-    if not dbs:
-        return None
-    try:
-        with open(max(dbs, key=os.path.getmtime), "rb") as fh:
-            blob = fh.read()
-    except OSError:
-        return None
-    names = re.findall(rb"gemini-[0-9a-z.\-]+", blob)
-    bits = [max((n.decode() for n in names), key=len)] if names else []
-    windows = gemini_usage()
-    for label in ("5h", "wk"):
-        window = windows.get(label)
-        if window:
-            bar, left = battery(window["used_percentage"])
-            bits.append(f"{label} {bar} {left:.0f}%({until(window['resets_at'])})")
+    # 실제 잔량과 어긋나 보일 수 있으니 값이 낡았으면 언제 기준인지 밝힌다
+    if windows and snapshot.age > STALE_LIMITS:
+        bits.append("%dm전" % (snapshot.age // 60))
     return " ".join(bits) or None
 
 
 AGENTS = [
-    ("claude", claude_field),
-    ("codex", codex_field),
-    ("gemini", gemini_field),
+    ("claude", ClaudeAdapter()),
+    ("codex", CodexAdapter()),
+    ("gemini", GeminiAdapter()),
     ("kimi", None),
     ("grok", None),
 ]
 
 
 def relay_field(root):
-    try:
-        with open(os.path.join(CACHE, "relay", repo_key(root), "pending.json")) as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
+    data = read_json(CACHE / "relay" / repo_key(root) / "pending.json")
+    if not data:
         return None
     status = data.get("status")
     if status in ("completed", "failed") and time.time() - data.get("updated_at", 0) > 300:
@@ -358,10 +125,10 @@ def open_panes():
 def line(root):
     panes = open_panes()
     parts = []
-    for name, reader in AGENTS:
+    for name, adapter in AGENTS:
         if panes is not None and name not in panes:
             continue
-        value = reader(root) if reader else None
+        value = render(adapter.snapshot(root)) if adapter else None
         if value:
             LAST[name] = value
         else:
@@ -376,11 +143,13 @@ def line(root):
 
 def mute_input(fd):
     """상태 바는 읽을 게 없다. 클릭해서 타이핑해도 화면이 밀리지 않도록 에코를 끈다."""
+    if termios is None:
+        return
     try:
         attrs = termios.tcgetattr(fd)
         attrs[3] &= ~(termios.ECHO | termios.ICANON)
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    except (termios.error, OSError, ValueError):
+    except (OSError, ValueError):
         pass
 
 
@@ -403,11 +172,11 @@ def main():
         if once:
             print()
             return
-        if fd is not None:
+        if fd is not None and termios is not None:
             # 클릭 후 눌린 키가 버퍼에 쌓이지 않도록 버린다
             try:
                 termios.tcflush(fd, termios.TCIFLUSH)
-            except (termios.error, OSError):
+            except OSError:
                 pass
         time.sleep(INTERVAL)
 

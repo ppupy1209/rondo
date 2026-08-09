@@ -19,19 +19,36 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 
 ## 설치
 
-필수 환경은 macOS 또는 Linux, Python 3.10+, Git, [zellij](https://zellij.dev/) 0.44 이상입니다.
+### macOS / Linux
 
 ```sh
-git clone https://github.com/ppupy1209/rondo.git ~/rondo
-sh ~/rondo/install.sh
-rondo setup
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/main/install.sh | sh
 ```
 
-설치는 `~/.local/bin`에 symlink를 만듭니다. 이후에는 `git -C ~/rondo pull`만 하면 즉시 업데이트됩니다. `~/.local/bin`이 `PATH`에 있어야 합니다.
+필요한 런타임은 Python 3.10 이상뿐입니다. 설치 프로그램이 Rondo와 Zellij를 내려받고 `~/.local/bin`에 명령을 만든 뒤 셸 `PATH`까지 등록합니다.
+
+### Windows
+
+PowerShell을 열고 다음 한 줄을 실행합니다.
+
+```powershell
+irm https://raw.githubusercontent.com/ppupy1209/rondo/main/install.ps1 | iex
+```
+
+Windows 설치 프로그램이 Rondo와 네이티브 Zellij를 내려받습니다. Python 3.10 이상이 없으면 WinGet으로 Python도 설치합니다. WSL은 필요하지 않습니다. 설치 후 새 터미널을 여세요.
+
+운영체제와 관계없이 실제로 사용할 에이전트 CLI를 하나 이상 설치하면 됩니다. 모든 지원 CLI를 설치할 필요는 없으며, setup에서 현재 설치된 에이전트를 자동으로 찾습니다.
+
+설치가 끝나면 다음 두 명령을 실행합니다.
+
+```sh
+rondo setup
+rondo
+```
+
+이미 clone한 저장소에서 설치하려면 macOS/Linux는 `sh install.sh`, Windows PowerShell은 `.\install.ps1`을 실행합니다. 업데이트하거나 설치를 복구할 때도 같은 명령을 다시 실행하면 됩니다.
 
 기존 `ai-tools` 설정은 첫 실행 때 자동 이전합니다. 예전 `ai`, `ai-status`, `claude-statusline` 명령도 호환 별칭으로 계속 동작합니다.
-
-기존 clone에서 이번 변경을 pull했다면 새 `rondo*` 명령의 symlink를 추가하기 위해 `sh ~/ai-tools/install.sh`을 한 번 실행하세요. 로컬 clone 디렉터리 이름은 `ai-tools` 그대로 두어도 됩니다.
 
 ## 빠른 시작
 
@@ -86,7 +103,7 @@ rondo lens https://staging.example.com --allow-remote
 
 맥락 파일에는 선택 요소 주변의 부분 스크린샷, 정리된 DOM과 화면 텍스트, 필요한 계산 스타일, 접근성 정보만 들어갑니다. 폼 입력값은 DOM에서 제거하고 스크린샷을 찍는 순간에도 가립니다. 쿠키, 브라우저 저장소, 자격증명, 전체 화면은 읽지 않습니다. 기본 허용 범위는 localhost이며 원격 페이지는 `--allow-remote`를 명시해야 합니다.
 
-Lens는 격리된 Chrome/Chromium 프로필을 열고 선택이 끝나면 임시 프로필을 삭제합니다. 브라우저를 자동으로 찾지 못하면 `RONDO_BROWSER=/브라우저/실행파일/경로`를 지정할 수 있습니다.
+Lens는 격리된 Chrome, Chromium 또는 Microsoft Edge 프로필을 열고 선택이 끝나면 임시 프로필을 삭제합니다. 브라우저를 자동으로 찾지 못하면 `RONDO_BROWSER=/브라우저/실행파일/경로`를 지정할 수 있습니다.
 
 ## 동작 방식
 
@@ -148,13 +165,13 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo continue` | 대기 중인 인계를 기존 Codex 패널로 전달 |
 | `rondo doctor` | zellij·에이전트·설정 점검 |
 | `rondo -l` | 살아 있는 세션 목록 |
-| `handoff --init` | 저장소에 선택적인 Git 핸드오프 로그 활성화 |
+| `handoff --init` | macOS/Linux에서 선택적인 Git 핸드오프 로그 활성화 |
 
 zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 탭 이동, `Ctrl+o` 다음 `d`로 디태치합니다.
 
 ## 선택적인 Git 핸드오프 로그
 
-저장소에서 `handoff --init`을 실행하면 `docs/handoff.md`가 생깁니다. 에이전트 세션이 끝날 때 직전 핸드오프 이후의 커밋 제목을 기록합니다. 최신 20개만 활성 섹션에 두고, 오래된 항목은 지우지 않고 archive로 옮깁니다.
+macOS/Linux의 저장소에서 `handoff --init`을 실행하면 `docs/handoff.md`가 생깁니다. 에이전트 세션이 끝날 때 직전 핸드오프 이후의 커밋 제목을 기록합니다. 최신 20개만 활성 섹션에 두고, 오래된 항목은 지우지 않고 archive로 옮깁니다. 이 선택형 셸 로그는 Windows에 설치하지 않으며, 공통 작업공간·화면에 보이는 위임·Lens·연속 작업 인계는 Windows에서도 사용할 수 있습니다.
 
 대상 탐색 순서는 `$HANDOFF_FILE`, `docs/collab/status.md`, `docs/handoff.md`입니다. 이 파일이 없는 저장소는 건드리지 않습니다.
 
@@ -185,6 +202,8 @@ python3 -m unittest discover -s tests -v
 python3 -m py_compile bin/rondo bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
+
+GitHub Actions에서 macOS, Linux, Windows의 Python 테스트와 설치 smoke test를 실행합니다.
 
 ## 라이선스
 

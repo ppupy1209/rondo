@@ -1,6 +1,23 @@
 #!/bin/sh
-# Install Rondo commands as symlinks. A git pull updates them immediately.
+# One-command bootstrap or local installer for macOS and Linux.
 set -eu
+
+case "$0" in
+    *install.sh) ;;
+    *)
+        command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
+        command -v tar >/dev/null 2>&1 || { echo "tar is required" >&2; exit 1; }
+        app="${RONDO_INSTALL_DIR:-$HOME/.local/share/rondo}"
+        archive=$(mktemp)
+        trap 'rm -f "$archive"' EXIT HUP INT TERM
+        mkdir -p "$app"
+        curl -fsSL "https://github.com/ppupy1209/rondo/archive/refs/heads/main.tar.gz" -o "$archive"
+        tar -xzf "$archive" -C "$app" --strip-components=1
+        rm -f "$archive"
+        trap - EXIT HUP INT TERM
+        exec sh "$app/install.sh"
+        ;;
+esac
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RONDO_USER_HOME="${RONDO_HOME:-$HOME}"
@@ -9,6 +26,25 @@ LAYOUTS="$RONDO_USER_HOME/.config/zellij/layouts"
 SETTINGS="$RONDO_USER_HOME/.claude/settings.json"
 
 mkdir -p "$BIN" "$LAYOUTS"
+
+python3 -c 'import sys; assert sys.version_info >= (3, 10)' 2>/dev/null || {
+    echo "Python 3.10+ is required. Install Python and run this command again." >&2
+    exit 1
+}
+
+if ! command -v zellij >/dev/null 2>&1 && [ ! -x "$BIN/zellij" ]; then
+    command -v curl >/dev/null 2>&1 || { echo "curl is required to install Zellij" >&2; exit 1; }
+    case "$(uname -s)-$(uname -m)" in
+        Darwin-arm64) target=aarch64-apple-darwin ;;
+        Darwin-x86_64) target=x86_64-apple-darwin ;;
+        Linux-aarch64|Linux-arm64) target=aarch64-unknown-linux-musl ;;
+        Linux-x86_64) target=x86_64-unknown-linux-musl ;;
+        *) echo "Unsupported platform for automatic Zellij installation: $(uname -s) $(uname -m)" >&2; exit 1 ;;
+    esac
+    echo "install Zellij"
+    curl -fsSL "https://github.com/zellij-org/zellij/releases/latest/download/zellij-$target.tar.gz" | tar -xz -C "$BIN" zellij
+    chmod +x "$BIN/zellij"
+fi
 
 for f in "$repo"/bin/*; do
     ln -sfn "$f" "$BIN/$(basename "$f")"
@@ -76,7 +112,18 @@ fi
 
 case ":$PATH:" in
     *":$BIN:"*) ;;
-    *) echo "주의  $BIN 이 PATH 에 없음. ~/.zshrc 에 추가 필요" >&2 ;;
+    *)
+        case "${SHELL:-}" in
+            */zsh) profile="$RONDO_USER_HOME/.zshrc" ;;
+            */bash) profile="$RONDO_USER_HOME/.bashrc" ;;
+            *) profile="$RONDO_USER_HOME/.profile" ;;
+        esac
+        touch "$profile"
+        if ! grep -F "$BIN" "$profile" >/dev/null 2>&1; then
+            printf '\n# Rondo\nexport PATH="%s:$PATH"\n' "$BIN" >> "$profile"
+            echo "path  $profile 갱신"
+        fi
+        ;;
 esac
 
 echo

@@ -10,11 +10,18 @@ import re
 import shutil
 import subprocess
 import sys
-import termios
-import tty
 from pathlib import Path
 
-VERSION = "0.4.0"
+if os.name == "nt":
+    import msvcrt
+else:
+    import termios
+    import tty
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+VERSION = "0.5.0"
+WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
@@ -41,7 +48,7 @@ TEXT = {
   rondo language        한국어 / English 변경
   rondo relay [모드]    Claude → Codex 인계 상태 / 모드 변경
   rondo continue        준비된 인계를 Codex에서 계속
-  rondo doctor          설치와 설정 진단
+  rondo doctor [--deep] 설치·설정 진단 (--deep 은 벤더 데이터까지)
   rondo -l              열려 있는 세션 목록
 
 세션 안에서
@@ -84,6 +91,10 @@ TEXT = {
         "doctor_config": "설정",
         "doctor_agents": "에이전트",
         "doctor_hint": "필수 항목을 설치한 뒤 `rondo setup`을 실행하세요.",
+        "doctor_deep_title": "벤더 데이터 점검",
+        "doctor_deep_hint": "`rondo doctor --deep`으로 벤더 데이터까지 점검합니다.",
+        "doctor_unknown_version": "버전 확인 불가",
+        "doctor_changed": "벤더 업데이트로 깨진 항목",
         "select_auto_no_codex": "자동 인계에는 선택된 Codex 패널과 CLI가 필요합니다.",
         "send_usage": "사용법: rondo send <claude|codex|gemini|kimi|grok> <메시지>",
         "empty_message": "보낼 메시지가 비어 있습니다.",
@@ -103,7 +114,7 @@ TEXT = {
   rondo language        Switch between English and Korean
   rondo relay [mode]    Show or change Claude → Codex relay mode
   rondo continue        Continue a prepared relay in Codex
-  rondo doctor          Diagnose the installation and configuration
+  rondo doctor [--deep] Diagnose install and config (--deep probes vendor data)
   rondo -l              List running sessions
 
 Inside a session
@@ -146,6 +157,10 @@ Inside a session
         "doctor_config": "Configuration",
         "doctor_agents": "Agents",
         "doctor_hint": "Install required items, then run `rondo setup`.",
+        "doctor_deep_title": "Vendor data probe",
+        "doctor_deep_hint": "Run `rondo doctor --deep` to probe vendor data too.",
+        "doctor_unknown_version": "version unknown",
+        "doctor_changed": "Broken by a vendor update",
         "select_auto_no_codex": "Automatic relay requires a selected Codex pane and CLI.",
         "send_usage": "Usage: rondo send <claude|codex|gemini|kimi|grok> <message>",
         "empty_message": "The message is empty.",
@@ -213,6 +228,13 @@ def installed(name: str) -> bool:
 
 
 def _read_key() -> str:
+    if WINDOWS:
+        first = msvcrt.getwch()
+        if first == "\x03":
+            raise KeyboardInterrupt
+        if first in ("\x00", "\xe0"):
+            return {"H": "\x1b[A", "P": "\x1b[B"}.get(msvcrt.getwch(), "")
+        return first
     first = sys.stdin.buffer.read(1)
     if first == b"\x03":
         raise KeyboardInterrupt
@@ -232,10 +254,11 @@ def choose_one(title: str, options: list[tuple[str, str]], default: int = 0) -> 
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise RuntimeError(t("need_tty"))
     current = default
-    old = termios.tcgetattr(sys.stdin.fileno())
+    old = termios.tcgetattr(sys.stdin.fileno()) if not WINDOWS else None
     sys.stdout.write("\x1b[?25l")
     try:
-        tty.setcbreak(sys.stdin.fileno())
+        if not WINDOWS:
+            tty.setcbreak(sys.stdin.fileno())
         while True:
             rows = [f"  {'›' if i == current else ' '} {label}" for i, (_, label) in enumerate(options)]
             _draw(title, rows, "↑/↓ · Enter")
@@ -247,7 +270,8 @@ def choose_one(title: str, options: list[tuple[str, str]], default: int = 0) -> 
             elif key in ("\r", "\n"):
                 return options[current][0]
     finally:
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
+        if old is not None:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
         sys.stdout.write("\x1b[2J\x1b[H\x1b[?25h")
         sys.stdout.flush()
 
@@ -264,10 +288,11 @@ def choose_agents(defaults: set[str]) -> list[str]:
     names = list(AGENTS)
     selected = {name for name in defaults if name in AGENTS and installed(name)}
     current = 0
-    old = termios.tcgetattr(sys.stdin.fileno())
+    old = termios.tcgetattr(sys.stdin.fileno()) if not WINDOWS else None
     sys.stdout.write("\x1b[?25l")
     try:
-        tty.setcbreak(sys.stdin.fileno())
+        if not WINDOWS:
+            tty.setcbreak(sys.stdin.fileno())
         while True:
             rows = []
             for i, name in enumerate(names):
@@ -291,7 +316,8 @@ def choose_agents(defaults: set[str]) -> list[str]:
             elif key in ("\r", "\n"):
                 _draw(t("agent_title"), rows, t("none"))
     finally:
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
+        if old is not None:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
         sys.stdout.write("\x1b[2J\x1b[H\x1b[?25h")
         sys.stdout.flush()
 
@@ -349,9 +375,12 @@ def setup() -> None:
 
 
 def repo_root() -> Path:
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
-    )
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+        )
+    except OSError:
+        return Path.cwd()
     return Path(result.stdout.strip()) if result.returncode == 0 else Path.cwd()
 
 
@@ -389,21 +418,30 @@ def configured_panels() -> list[str]:
     return values
 
 
+def pane_command(name: str) -> str:
+    if not WINDOWS:
+        return AGENTS[name][0]
+    if name == "claude":
+        return shutil.which(AGENTS[name][1]) or AGENTS[name][1]
+    return AGENTS[name][0] + ".cmd"
+
+
 def write_layout(panels: list[str]) -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     target = CACHE_DIR / "layout.kdl"
     first, rest = panels[0], panels[1:]
+    status_command = "rondo-status.cmd" if WINDOWS else "rondo-status"
     lines = [
         "layout {",
         '    tab name="agents" focus=true {',
-        '        pane name="status" command="rondo-status" size=1 borderless=true',
+        f'        pane name="status" command="{status_command}" size=1 borderless=true',
         '        pane split_direction="vertical" {',
-        f'            pane name="{first}" command="{AGENTS[first][0]}" size="50%"',
+        f'            pane name="{first}" command={json.dumps(pane_command(first))} size="50%"',
     ]
     if rest:
         lines.append('            pane split_direction="horizontal" {')
         lines.extend(
-            f'                pane name="{name}" command="{AGENTS[name][0]}"' for name in rest
+            f'                pane name="{name}" command={json.dumps(pane_command(name))}' for name in rest
         )
         lines.append("            }")
     lines.extend(["        }", "    }", '    tab name="shell"', "}"])
@@ -454,7 +492,7 @@ def add_agent(name: str | None) -> None:
     subprocess.run(["zellij", "action", "move-focus", "down"], check=False)
     os.execvp(
         "zellij",
-        ["zellij", "action", "new-pane", "--name", name, "--", AGENTS[name][0]],
+        ["zellij", "action", "new-pane", "--name", name, "--", pane_command(name)],
     )
 
 
@@ -562,22 +600,34 @@ def relay_command(mode: str | None) -> None:
 
 
 def continue_relay() -> None:
-    script = Path(__file__).resolve().with_name("rondo-relay")
-    os.execv(script, [str(script), "--continue"])
+    exec_script("rondo-relay", "--continue")
 
 
 def open_lens(args: list[str]) -> None:
-    script = Path(__file__).resolve().with_name("rondo-lens")
-    os.execv(script, [str(script), *args])
+    exec_script("rondo-lens", *args)
 
 
-def doctor() -> int:
+def script_argv(name: str, *args: str) -> list[str]:
+    script = Path(__file__).resolve().with_name(name)
+    return [sys.executable, str(script), *args] if WINDOWS else [str(script), *args]
+
+
+def exec_script(name: str, *args: str) -> None:
+    argv = script_argv(name, *args)
+    os.execv(argv[0] if WINDOWS else Path(argv[0]), argv)
+
+
+def doctor(deep: bool = False) -> int:
     print(t("doctor_title"))
-    required = [("python3", True), ("zellij", True)]
+    required = [("python", sys.executable, True), ("zellij", "zellij", True)]
     optional = [(name, False) for name in AGENTS]
     failed = False
-    for name, is_required in required + optional:
-        executable = name if name not in AGENTS else AGENTS[name][1]
+    for item in required + optional:
+        if len(item) == 3:
+            name, executable, is_required = item
+        else:
+            name, is_required = item
+            executable = AGENTS[name][1]
         path = shutil.which(executable)
         mark = "✓" if path else ("✗" if is_required else "–")
         state = t("doctor_ok") if path else t("doctor_missing")
@@ -585,9 +635,41 @@ def doctor() -> int:
         failed = failed or (is_required and not path)
     panels = read_setting("panels")
     print(f"  {'✓' if panels else '–'} {t('doctor_config'):<10} {panels or t('doctor_missing')}")
+    regressed = deep_probe() if deep else False
+    if not deep:
+        print(t("doctor_deep_hint"))
     if failed:
         print(t("doctor_hint"))
-    return int(failed)
+    return int(failed or regressed)
+
+
+def deep_probe() -> bool:
+    """어댑터별로 지금 실제 읽히는지 확인하고, 벤더 업데이트로 깨진 것을 알린다.
+
+    표시만 하는 진단이라 어댑터 import 실패가 doctor 전체를 죽이면 안 된다.
+    """
+    try:
+        from rondo import registry
+    except ImportError as exc:
+        print(f"\n{t('doctor_deep_title')}: lib/rondo import 실패 ({exc})")
+        return True
+
+    root = repo_root()
+    print(f"\n{t('doctor_deep_title')}")
+    warnings: list[str] = []
+    for adapter in registry.all_adapters():
+        if not adapter.installed():
+            continue
+        version = adapter.version() or t("doctor_unknown_version")
+        print(f"  {adapter.name} {version}")
+        for check in adapter.diagnose(root):
+            mark = "✓" if check.ok else "✗"
+            print(f"    {mark} {check.capability:<10} {check.detail}")
+        warnings.extend(registry.check_fingerprint(adapter, root))
+
+    for warning in warnings:
+        print(f"  ! {t('doctor_changed')}: {warning}")
+    return bool(warnings)
 
 
 def main() -> int:
@@ -614,7 +696,7 @@ def main() -> int:
     elif command == "continue":
         continue_relay()
     elif command == "doctor":
-        return doctor()
+        return doctor("--deep" in args)
     elif command:
         open_session(command)
     else:

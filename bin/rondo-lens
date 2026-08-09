@@ -31,6 +31,7 @@ AGENT_LABELS = {
     "kimi": "Kimi Code",
     "grok": "Grok Build",
 }
+WINDOWS = os.name == "nt"
 
 TEXT = {
     "ko": {
@@ -142,6 +143,15 @@ def browser_executable() -> str | None:
         "chromium-browser",
         "brave-browser",
     ]
+    if WINDOWS:
+        candidates[:0] = [
+            str(Path(os.environ.get("LOCALAPPDATA", "C:/")) / "Google/Chrome/Application/chrome.exe"),
+            str(Path(os.environ.get("LOCALAPPDATA", "C:/")) / "Microsoft/Edge/Application/msedge.exe"),
+            str(Path(os.environ.get("PROGRAMFILES", "C:/")) / "Google/Chrome/Application/chrome.exe"),
+            str(Path(os.environ.get("PROGRAMFILES", "C:/")) / "Microsoft/Edge/Application/msedge.exe"),
+            "chrome.exe",
+            "msedge.exe",
+        ]
     for candidate in candidates:
         path = shutil.which(candidate) if "/" not in candidate else candidate
         if path and Path(path).is_file() and os.access(path, os.X_OK):
@@ -642,7 +652,8 @@ def send(packet: Path, selection: dict, instruction: str, agent: str) -> None:
         "Read the packet, locate the owning component in this repository, and keep changes scoped to the selected element."
     )
     rondo = Path(__file__).resolve().with_name("rondo")
-    subprocess.run([str(rondo), "send", agent, message], check=True)
+    command = [sys.executable, str(rondo), "send", agent, message] if WINDOWS else [str(rondo), "send", agent, message]
+    subprocess.run(command, check=True)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

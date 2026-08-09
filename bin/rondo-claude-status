@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -11,16 +10,18 @@ import sys
 import time
 from pathlib import Path
 
-CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
-CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
-LIMITS = CACHE / "claude-limits.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from rondo.adapters import claude  # noqa: E402
+from rondo.paths import CACHE, atomic_json, read_json, repo_key, setting  # noqa: E402
+
 BAR_CELLS = 8
+WINDOWS = os.name == "nt"
 
 
-def battery(used_pct: float) -> tuple[str, float]:
-    left = max(0.0, min(100.0, 100.0 - used_pct))
+def battery(left: float) -> str:
     filled = int(round(left / 100 * BAR_CELLS))
-    return "▓" * filled + "░" * (BAR_CELLS - filled), left
+    return "▓" * filled + "░" * (BAR_CELLS - filled)
 
 
 def remaining(epoch: float) -> str:
@@ -31,56 +32,9 @@ def remaining(epoch: float) -> str:
     return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
 
 
-def repo_key(project: str) -> str:
-    return hashlib.sha256(str(Path(project).resolve()).encode()).hexdigest()[:16]
-
-
-def atomic_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    temp.write_text(json.dumps(data, ensure_ascii=False))
-    os.chmod(temp, 0o600)
-    temp.replace(path)
-
-
-def setting(name: str, default: str) -> str:
-    try:
-        return (CONFIG / name).read_text().strip()
-    except OSError:
-        return default
-
-
-def project_dir(data: dict) -> str | None:
-    return (data.get("workspace") or {}).get("project_dir") or data.get("cwd")
-
-
-def stash(data: dict) -> None:
-    project = project_dir(data)
-    if not project:
-        return
-    limits = data.get("rate_limits") or {}
-    if limits:
-        atomic_json(LIMITS, {"rate_limits": limits, "at": int(time.time())})
-    atomic_json(
-        CACHE / f"claude.{repo_key(project)}.json",
-        {
-            "project": project,
-            "model": (data.get("model") or {}).get("display_name"),
-            "context_used": (data.get("context_window") or {}).get("used_percentage"),
-            "at": int(time.time()),
-        },
-    )
-
-
-def trigger_limit(data: dict) -> tuple[float, int] | None:
-    now = time.time()
-    windows = []
-    for key in ("five_hour", "seven_day"):
-        window = (data.get("rate_limits") or {}).get(key) or {}
-        reset = int(window.get("resets_at") or 0)
-        if reset > now and "used_percentage" in window:
-            windows.append((100.0 - float(window["used_percentage"]), reset))
-    return min(windows, default=None)
+def trigger_limit(data: dict):
+    """가장 빠듯한 창. 스키마는 어댑터가 안다."""
+    return claude.tightest(claude.windows_from_payload(data))
 
 
 def maybe_relay(data: dict) -> None:
@@ -92,15 +46,15 @@ def maybe_relay(data: dict) -> None:
         threshold = float(setting("threshold", "1"))
     except ValueError:
         threshold = 1.0
-    if not limit or limit[0] > threshold:
+    if not limit or limit.remaining > threshold:
         return
-    project = project_dir(data)
+    project = claude.project_dir(data)
     session = str(data.get("session_id") or "unknown")
     if not project:
         return
 
     relay_root = CACHE / "relay" / repo_key(project)
-    marker = relay_root / "triggers" / f"{session}-{limit[1]}"
+    marker = relay_root / "triggers" / f"{session}-{int(limit.resets_at)}"
     marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -112,14 +66,16 @@ def maybe_relay(data: dict) -> None:
     try:
         atomic_json(source, data)
         relay = Path(__file__).resolve().with_name("rondo-relay")
+        command = [sys.executable, str(relay), "--capture", str(source)] if WINDOWS else [str(relay), "--capture", str(source)]
+        detached = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {"start_new_session": True}
         with open(os.devnull, "w") as quiet:
             subprocess.Popen(
-                [str(relay), "--capture", str(source)],
+                command,
                 stdin=subprocess.DEVNULL,
                 stdout=quiet,
                 stderr=quiet,
-                start_new_session=True,
                 close_fds=True,
+                **detached,
             )
     except OSError:
         marker.unlink(missing_ok=True)
@@ -128,9 +84,8 @@ def maybe_relay(data: dict) -> None:
 def relay_badge(project: str | None) -> str | None:
     if not project:
         return None
-    try:
-        index = json.loads((CACHE / "relay" / repo_key(project) / "pending.json").read_text())
-    except (OSError, ValueError):
+    index = read_json(CACHE / "relay" / repo_key(project) / "pending.json")
+    if not index:
         return None
     if index.get("status") in ("sent", "completed", "failed") and time.time() - index.get("updated_at", 0) > 300:
         return None
@@ -151,21 +106,17 @@ def main() -> None:
     except (json.JSONDecodeError, ValueError):
         return
 
-    model = data.get("model") or {}
-    parts = [model.get("display_name") or model.get("id") or "?"]
-    effort = (data.get("effort") or {}).get("level")
-    if effort:
-        parts[0] += f" {effort}"
-    for key, label in (("five_hour", "5h"), ("seven_day", "wk")):
-        window = (data.get("rate_limits") or {}).get(key)
-        if window:
-            bar, left = battery(float(window["used_percentage"]))
-            parts.append(f"{label} {bar} {left:.0f}% ({remaining(float(window['resets_at']))})")
-    badge = relay_badge(project_dir(data))
+    parts = [claude.model_from_payload(data) or "?"]
+    for window in claude.windows_from_payload(data):
+        parts.append(
+            f"{window.label} {battery(window.remaining)} "
+            f"{window.remaining:.0f}% ({remaining(window.resets_at)})"
+        )
+    badge = relay_badge(claude.project_dir(data))
     if badge:
         parts.append(badge)
     print(" · ".join(parts))
-    stash(data)
+    claude.write_cache(data)
     maybe_relay(data)
 
 

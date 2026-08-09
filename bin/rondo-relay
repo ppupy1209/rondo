@@ -12,11 +12,16 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from rondo.adapters import claude  # noqa: E402
+
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
 MAX_TRANSCRIPT_BYTES = 2_000_000
 MAX_MESSAGE_CHARS = 6_000
 MAX_PACKET_CHARS = 30_000
+WINDOWS = os.name == "nt"
 
 SECRET_PATTERNS = (
     re.compile(r"\b(sk-[A-Za-z0-9_-]{12,})\b"),
@@ -116,15 +121,9 @@ def recent_messages(transcript: Path) -> list[tuple[str, str]]:
     return messages[-8:]
 
 
-def active_limit(source: dict) -> tuple[float, int, str] | None:
-    now = time.time()
-    candidates = []
-    for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
-        window = (source.get("rate_limits") or {}).get(key) or {}
-        reset = int(window.get("resets_at") or 0)
-        if reset > now and "used_percentage" in window:
-            candidates.append((100.0 - float(window["used_percentage"]), reset, label))
-    return min(candidates, default=None)
+def active_limit(source: dict):
+    """가장 빠듯한 창. rate_limits 스키마는 claude 어댑터만 안다."""
+    return claude.tightest(claude.windows_from_payload(source))
 
 
 def packet_markdown(source: dict, root: Path) -> str:
@@ -137,7 +136,10 @@ def packet_markdown(source: dict, root: Path) -> str:
     transcript = Path(str(source.get("transcript_path") or ""))
     messages = recent_messages(transcript) if transcript.is_file() else []
     limit = active_limit(source)
-    reason = f"Claude {limit[2]} allowance reached {limit[0]:.1f}% remaining" if limit else "manual handoff"
+    reason = (
+        f"Claude {limit.label} allowance reached {limit.remaining:.1f}% remaining"
+        if limit else "manual handoff"
+    )
 
     conversation = []
     for role, text in messages:
@@ -194,7 +196,7 @@ Continue from the current workspace. Do not redo completed work. Inspect the act
 
 def claim_marker(directory: Path, source: dict) -> Path | None:
     limit = active_limit(source)
-    reset = limit[1] if limit else int(time.time())
+    reset = int(limit.resets_at) if limit else int(time.time())
     session = re.sub(r"[^A-Za-z0-9_.-]", "-", str(source.get("session_id") or "unknown"))
     marker = directory / "markers" / f"{session}-{reset}"
     marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -224,13 +226,17 @@ def codex_prompt(packet_path: Path) -> str:
     return f"[Rondo · Claude → Codex] Claude delegated this task. Read the continuity packet and continue the current work: {packet_path}"
 
 
+def local_script(name: str, *args: str) -> list[str]:
+    script = Path(__file__).resolve().with_name(name)
+    return [sys.executable, str(script), *args] if WINDOWS else [str(script), *args]
+
+
 def run_auto(directory: Path, packet_path: Path, root: Path) -> int:
     log = directory / "codex.log"
     write_index(directory, packet_path, root, "running", log=str(log))
-    rondo = Path(__file__).resolve().with_name("rondo")
     try:
         result = subprocess.run(
-            [str(rondo), "send", "codex", codex_prompt(packet_path)],
+            local_script("rondo", "send", "codex", codex_prompt(packet_path)),
             cwd=root,
             capture_output=True,
             text=True,

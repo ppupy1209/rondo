@@ -34,6 +34,12 @@ class RondoTests(unittest.TestCase):
         rondo = load_script("rondo", self.config, self.cache)
         self.assertEqual(rondo["safe_session_name"]("My project / feature"), "My-project-feature")
         self.assertEqual(rondo["safe_session_name"]("***"), "rondo")
+
+    def test_missing_git_falls_back_to_current_directory(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["repo_root"].__globals__
+        with patch.object(scope["subprocess"], "run", side_effect=FileNotFoundError):
+            self.assertEqual(rondo["repo_root"](), Path.cwd())
         self.assertEqual(rondo["rondo_session_name"]("my-project"), "rondo-my-project")
 
     def test_exited_zellij_sessions_are_not_treated_as_active(self):
@@ -95,9 +101,27 @@ class RondoTests(unittest.TestCase):
     def test_layout_contains_only_known_commands(self):
         rondo = load_script("rondo", self.config, self.cache)
         layout = rondo["write_layout"](["claude", "codex", "gemini"]).read_text()
-        self.assertIn('command="rondo-status"', layout)
-        self.assertIn('command="codex-session"', layout)
+        suffix = ".cmd" if os.name == "nt" else ""
+        self.assertIn(f'command="rondo-status{suffix}"', layout)
+        self.assertIn(f'command="codex-session{suffix}"', layout)
         self.assertIn('tab name="shell"', layout)
+
+    def test_windows_layout_uses_cmd_launchers(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["write_layout"].__globals__
+        with patch.dict(scope, {"WINDOWS": True}):
+            layout = rondo["write_layout"](["codex", "gemini"]).read_text()
+        self.assertIn('command="rondo-status.cmd"', layout)
+        self.assertIn('command="codex-session.cmd"', layout)
+        self.assertIn('command="agy-session.cmd"', layout)
+
+    def test_windows_runs_companion_scripts_with_python(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["script_argv"].__globals__
+        with patch.dict(scope, {"WINDOWS": True}):
+            command = rondo["script_argv"]("rondo-lens", "http://localhost:3000")
+        self.assertEqual(command[0], scope["sys"].executable)
+        self.assertEqual(command[1], str(ROOT / "bin" / "rondo-lens"))
 
     def test_agent_message_is_pasted_and_submitted_to_named_pane(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -130,9 +154,12 @@ class RondoTests(unittest.TestCase):
         with patch.object(scope["os"], "execv") as execv:
             rondo["open_lens"](["http://localhost:4173", "--allow-remote"])
         script = ROOT / "bin" / "rondo-lens"
-        execv.assert_called_once_with(
-            script, [str(script), "http://localhost:4173", "--allow-remote"]
-        )
+        expected = [str(script), "http://localhost:4173", "--allow-remote"]
+        program = script
+        if os.name == "nt":
+            expected.insert(0, sys.executable)
+            program = sys.executable
+        execv.assert_called_once_with(program, expected)
 
 
 class LensTests(unittest.TestCase):
@@ -182,9 +209,10 @@ class LensTests(unittest.TestCase):
         self.assertIn("Make this button quieter", document)
         self.assertIn("main > button:nth-of-type(2)", document)
         self.assertEqual(image.read_bytes(), b"png")
-        self.assertEqual(packet.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(image.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(packet.parent.stat().st_mode & 0o777, 0o700)
+        if os.name != "nt":
+            self.assertEqual(packet.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(image.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(packet.parent.stat().st_mode & 0o777, 0o700)
 
     def test_capture_script_removes_form_values_and_masks_the_screenshot(self):
         script = self.lens["SELECTION_SCRIPT"]
@@ -293,8 +321,10 @@ class RelayTests(unittest.TestCase):
             "XDG_CONFIG_HOME": str(self.config),
             "XDG_CACHE_HOME": str(self.cache),
         }
+        script = ROOT / "bin" / "rondo-claude-status"
+        command = [sys.executable, str(script)] if os.name == "nt" else [str(script)]
         result = subprocess.run(
-            [str(ROOT / "bin" / "rondo-claude-status")],
+            command,
             input=json.dumps(self.source()),
             env=environment,
             capture_output=True,
@@ -320,10 +350,12 @@ class RelayTests(unittest.TestCase):
                 "seven_day": {"used_percentage": 99.5, "resets_at": reset},
             }
         }
-        left, _, label = relay["active_limit"](source)
-        self.assertEqual(left, 0.5)
-        self.assertEqual(label, "7d")
+        window = relay["active_limit"](source)
+        self.assertAlmostEqual(window.remaining, 0.5)
+        # 라벨은 claude 어댑터가 정한다 — 예전에는 여기만 "7d" 로 달랐다
+        self.assertEqual(window.label, "wk")
 
+    @unittest.skipIf(os.name == "nt", "optional Git handoff log requires a POSIX shell")
     def test_handoff_init_uses_selected_language(self):
         config = self.config / "rondo"
         config.mkdir(parents=True)

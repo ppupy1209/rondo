@@ -19,19 +19,36 @@ Rondo is local-first. It reads the files that each installed CLI already stores 
 
 ## Install
 
-Requirements: macOS or Linux, Python 3.10+, Git, and [zellij](https://zellij.dev/) 0.44+.
+### macOS / Linux
 
 ```sh
-git clone https://github.com/ppupy1209/rondo.git ~/rondo
-sh ~/rondo/install.sh
-rondo setup
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/main/install.sh | sh
 ```
 
-The installer creates symlinks in `~/.local/bin`, so `git -C ~/rondo pull` updates the installation immediately. Make sure `~/.local/bin` is in `PATH`.
+Python 3.10+ is the only runtime requirement. The installer downloads Rondo and Zellij, creates the commands in `~/.local/bin`, and adds that directory to your shell `PATH`.
+
+### Windows
+
+Open PowerShell and run:
+
+```powershell
+irm https://raw.githubusercontent.com/ppupy1209/rondo/main/install.ps1 | iex
+```
+
+The Windows installer downloads Rondo and native Zellij. If Python 3.10+ is missing, it installs Python through WinGet. WSL is not required. Open a new terminal after installation.
+
+On every platform, install at least one agent CLI you want to use. Rondo discovers the installed agents during setup; you do not need to install every supported CLI.
+
+Then run:
+
+```sh
+rondo setup
+rondo
+```
+
+To install from an existing clone instead, run `sh install.sh` on macOS/Linux or `.\install.ps1` in PowerShell. Rerun the same installer to update or repair an installation.
 
 Existing `ai-tools` installations are migrated on first run. The old `ai`, `ai-status`, and `claude-statusline` commands remain compatibility aliases.
-
-After pulling this rename into an existing clone, run `sh ~/ai-tools/install.sh` once so the new `rondo*` command symlinks are added. The clone directory itself may stay named `ai-tools`.
 
 ## Quick start
 
@@ -86,7 +103,7 @@ Hover gives immediate element highlighting. Click selects, Esc cancels, and the 
 
 The packet includes a cropped screenshot around the selection, sanitized DOM and visible text, a small computed-style set, and accessibility metadata. Form values are removed from the DOM and masked during the screenshot. Cookies, browser storage, credentials, and full-page screenshots are never read. Localhost is the default boundary; remote pages require the explicit `--allow-remote` flag.
 
-Lens launches an isolated Chrome/Chromium profile and deletes that temporary profile when the selection ends. Set `RONDO_BROWSER=/path/to/chrome` if the browser is not discovered automatically.
+Lens launches an isolated Chrome, Chromium, or Microsoft Edge profile and deletes that temporary profile when the selection ends. Set `RONDO_BROWSER=/path/to/browser` if the browser is not discovered automatically.
 
 ## How it works
 
@@ -148,13 +165,13 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo continue` | Send the pending handoff to the existing Codex pane |
 | `rondo doctor` | Check zellij, agents, and configuration |
 | `rondo -l` | List persistent sessions |
-| `handoff --init` | Enable the optional Git handoff log in a repository |
+| `handoff --init` | Enable the optional Git handoff log on macOS/Linux |
 
 Inside zellij: `Ctrl+p` + arrows moves panes, `Ctrl+t` + arrows moves tabs, and `Ctrl+o` then `d` detaches.
 
 ## Optional Git handoff log
 
-Run `handoff --init` in a repository to create `docs/handoff.md`. On session end, Rondo records commit subjects made since the previous handoff. It keeps the latest 20 entries in the active section and archives older entries instead of deleting them.
+On macOS/Linux, run `handoff --init` in a repository to create `docs/handoff.md`. On session end, Rondo records commit subjects made since the previous handoff. It keeps the latest 20 entries in the active section and archives older entries instead of deleting them. This optional shell-based log is not installed on Windows; the shared workspace, visible delegation, Lens, and continuity relay are available there.
 
 The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/handoff.md`. Repositories without one of these files are left untouched.
 
@@ -185,6 +202,8 @@ python3 -m unittest discover -s tests -v
 python3 -m py_compile bin/rondo bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
 ```
+
+GitHub Actions runs the Python suite and installer smoke tests on macOS, Linux, and Windows.
 
 ## License
 
