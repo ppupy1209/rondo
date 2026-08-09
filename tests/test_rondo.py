@@ -58,7 +58,27 @@ class RondoTests(unittest.TestCase):
             self.assertEqual(names[0], rondo["rondo_session_name"](company))
         self.assertEqual(len(set(names)), 3)
         self.assertTrue(all(name.startswith("rondo-backend-") for name in names))
-        self.assertTrue(all(len(name) <= 80 for name in names))
+        self.assertTrue(all(len(name) <= rondo["MAX_SESSION_NAME_CHARS"] for name in names))
+        self.assertLessEqual(
+            len(rondo["rondo_session_name"](company, "x" * 200)),
+            rondo["MAX_SESSION_NAME_CHARS"],
+        )
+
+    @unittest.skipIf(os.name == "nt", "Unix socket paths are not used on Windows")
+    def test_cli_uses_a_short_zellij_socket_directory(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["main"].__globals__
+        opener = unittest.mock.Mock()
+        with (
+            patch.dict(scope["os"].environ, {}, clear=True),
+            patch.dict(scope, {"open_session": opener}),
+            patch.object(scope["sys"], "argv", ["rondo"]),
+        ):
+            rondo["main"]()
+            socket_dir = scope["os"].environ["ZELLIJ_SOCKET_DIR"]
+
+        self.assertEqual(socket_dir, f"/tmp/rondo-{os.getuid()}")
+        opener.assert_called_once_with()
 
     def test_exited_zellij_sessions_are_not_treated_as_active(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -123,6 +143,7 @@ class RondoTests(unittest.TestCase):
         environment = {
             "RONDO_LANG": "ko",
             "RONDO_AUDIENCE": "nondev",
+            "RONDO_APPROVAL": "workspace",
             "RONDO_PANELS": "claude",
             "RONDO_RELAY": "ready",
         }
@@ -132,14 +153,148 @@ class RondoTests(unittest.TestCase):
         ):
             rondo["setup"]()
         self.assertEqual((self.config / "rondo" / "audience").read_text().strip(), "nondev")
+        self.assertEqual((self.config / "rondo" / "approval").read_text().strip(), "workspace")
+
+    def test_setup_rejects_more_than_four_panels(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["choose_agents"].__globals__
+        with (
+            patch.dict(scope["os"].environ, {"RONDO_PANELS": "claude codex gemini kimi grok"}),
+            patch.dict(scope, {"installed": lambda _name: True}),
+            patch.object(scope["sys"].stdin, "isatty", return_value=False),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "4"):
+                rondo["choose_agents"](set())
+
+    def test_first_rondo_run_configures_then_opens_the_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["open_session"].__globals__
+        setup = unittest.mock.Mock(
+            side_effect=lambda: rondo["write_setting"]("panels", "claude")
+        )
+        with (
+            patch.dict(scope, {
+                "setup": setup,
+                "repo_root": lambda: self.base,
+                "rondo_session_name": lambda _root, _custom=None: "rondo-first",
+                "zellij_sessions": lambda: (set(), set()),
+                "installed": lambda _name: True,
+                "write_layout": lambda _panels: self.base / "layout.kdl",
+                "git_policy": lambda _root: "direct",
+            }),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["os"], "chdir"),
+            patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                rondo["open_session"]()
+
+        setup.assert_called_once_with()
+        self.assertEqual(execvp.call_args.args[1][:3], ["zellij", "-s", "rondo-first"])
+
+    def test_add_refuses_a_fifth_agent_pane(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["add_agent"].__globals__
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ": "1"}),
+            patch.dict(scope, {
+                "installed": lambda _name: True,
+                "agent_panes": lambda: {
+                    "claude": "1", "codex": "2", "gemini": "3", "kimi": "4",
+                },
+            }),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "4"):
+                rondo["add_agent"]("grok")
+
+    def test_git_connect_and_policy_use_repository_local_config(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        repo = self.base / "repo"
+        repo.mkdir()
+        scope = rondo["git_command"].__globals__
+        with patch.dict(scope, {"repo_root": lambda: repo}):
+            rondo["git_command"](["connect", "https://github.com/me/project.git"])
+            rondo["git_command"](["policy", "review"])
+
+        origin = subprocess.run(
+            ["git", "-C", str(repo), "remote", "get-url", "origin"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        policy = subprocess.run(
+            ["git", "-C", str(repo), "config", "--local", "--get", "rondo.prPolicy"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(origin, "https://github.com/me/project.git")
+        self.assertEqual(policy, "review")
+
+    def test_code_review_all_starts_at_most_four_read_only_agents(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["code_review_command"].__globals__
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.dict(scope, {
+                "repo_root": lambda: self.base,
+                "git_output": lambda _root, *args, **_kwargs: (
+                    "true" if args[:2] == ("rev-parse", "--is-inside-work-tree")
+                    else "origin/main" if args and args[0] == "symbolic-ref"
+                    else ""
+                ),
+                "git_reviewers": lambda _root: list(rondo["AGENTS"]),
+                "installed": lambda _name: True,
+            }),
+            patch.object(scope["shutil"], "which", side_effect=lambda name: f"/bin/{name}"),
+            patch.object(scope["subprocess"], "run") as run,
+        ):
+            self.assertEqual(rondo["code_review_command"](["all"]), 0)
+
+        self.assertEqual(run.call_count, 4)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertTrue(all(command[:3] == ["zellij", "action", "new-pane"] for command in commands))
+        self.assertIn("plan", commands[0])
+        self.assertIn("read-only", commands[1])
+
+    def test_review_policy_creates_a_draft_pr_and_starts_reviews(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["pr_command"].__globals__
+        outputs = {
+            ("rev-parse", "--is-inside-work-tree"): "true",
+            ("status", "--porcelain"): "",
+            ("branch", "--show-current"): "feature/login",
+            ("symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main",
+        }
+        reviewer = unittest.mock.Mock(return_value=0)
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.dict(scope, {
+                "repo_root": lambda: self.base,
+                "git_origin": lambda _root: "https://github.com/me/project",
+                "git_output": lambda _root, *args, **_kwargs: outputs.get(args, ""),
+                "git_policy": lambda _root: "review",
+                "code_review_command": reviewer,
+            }),
+            patch.object(scope["shutil"], "which", return_value="/bin/gh"),
+            patch.object(scope["subprocess"], "run") as run,
+        ):
+            self.assertEqual(rondo["pr_command"](["Improve", "login"]), 0)
+
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            ["git", "-C", str(self.base), "push", "--set-upstream", "origin", "feature/login"],
+        )
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["gh", "pr", "create", "--fill", "--draft", "--title", "Improve login"],
+        )
+        reviewer.assert_called_once_with(["all"])
 
     def test_layout_contains_only_known_commands(self):
         rondo = load_script("rondo", self.config, self.cache)
-        layout = rondo["write_layout"](["claude", "codex", "gemini"]).read_text()
+        layout = rondo["write_layout"](["claude", "codex", "gemini", "kimi"]).read_text()
         suffix = ".cmd" if os.name == "nt" else ""
         self.assertIn(f'command="rondo-status{suffix}"', layout)
         self.assertIn(f'command="claude-session{suffix}"', layout)
         self.assertIn(f'command="codex-session{suffix}"', layout)
+        self.assertIn(f'command="kimi-session{suffix}"', layout)
         self.assertIn('tab name="shell"', layout)
 
     def test_windows_layout_uses_cmd_launchers(self):
@@ -384,6 +539,26 @@ class AgentSessionTests(unittest.TestCase):
         self.assertIn("${base_prompt}", agent_file.read_text())
         if os.name != "nt":
             self.assertEqual(agent_file.stat().st_mode & 0o777, 0o600)
+
+    def test_workspace_approval_uses_each_cli_native_mode(self):
+        commands = self.runner["session_commands"]
+        self.assertIn("acceptEdits", commands("claude", "default", "workspace")[1])
+        self.assertIn("--approve-for-me", commands("codex", "default", "workspace")[1])
+        self.assertIn("accept-edits", commands("gemini", "default", "workspace")[1])
+        self.assertIn("--auto", commands("kimi", "default", "workspace")[1])
+        self.assertIn("auto", commands("grok", "default", "workspace")[1])
+
+    def test_git_pr_policy_is_added_to_every_agent_prompt(self):
+        commands = self.runner["session_commands"]
+        scope = commands.__globals__
+        with patch.dict(scope["os"].environ, {"RONDO_GIT_POLICY": "review"}):
+            for agent in ("claude", "codex", "gemini", "kimi", "grok"):
+                resume, fresh, _ = commands(agent, "default", "ask")
+                text = " ".join(resume or fresh)
+                if agent == "kimi":
+                    path = Path(fresh[fresh.index("--agent-file") + 1])
+                    text = path.read_text()
+                self.assertIn("Rondo Git policy", text)
 
 
 class LensTests(unittest.TestCase):

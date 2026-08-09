@@ -139,7 +139,7 @@ esac
 
 echo
 echo "완료. 사용법:"
-echo "  rondo setup     언어·패널·인계 설정"
-echo "  rondo           프로젝트 세션 열기"
+echo "  rondo           첫 설정 후 프로젝트 세션 열기"
+echo "  rondo setup     저장된 설정 변경"
 echo "  rondo doctor    설치 상태 확인"
 echo "  handoff --init  이 레포에서 핸드오프 기록 켜기"

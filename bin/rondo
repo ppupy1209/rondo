@@ -22,11 +22,15 @@ else:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
+from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
+MAX_SESSION_NAME_CHARS = 56
+MAX_PANELS = 4
+GIT_POLICIES = ("direct", "pr", "review")
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
 LEGACY_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ai-tools"
@@ -44,7 +48,7 @@ TEXT = {
     "ko": {
         "usage": """사용법
   rondo                 이 프로젝트의 세션 열기 / 붙기
-  rondo setup           언어·패널·자동 인계 설정
+  rondo setup           언어·패널·승인·자동 인계 설정 변경
   rondo audience [단계] 설명 수준 선택 (default|nondev|guided)
   rondo add [에이전트]   현재 세션에 패널 추가
   rondo send <에이전트> <메시지>
@@ -56,6 +60,10 @@ TEXT = {
                         검증할 의도와 성공 조건 기록
   rondo proof [--reviewer codex] [--no-checks]
                         실행 증거·위험도·사람 판단 항목 생성
+  rondo git [명령]      Git 연결·PR 정책·reviewer 설정
+  rondo code-review [에이전트|all]
+                        각 에이전트의 독립 읽기 전용 코드 리뷰
+  rondo pr [제목]       현재 브랜치를 push하고 정책에 맞는 PR 생성
   rondo review [--budget 2m]
                         제한 시간 안에 볼 항목만 표시
   rondo lens [URL]      화면 요소를 클릭해 해당 맥락만 전달
@@ -85,11 +93,18 @@ TEXT = {
         "audience_guided": "개발자 · 추가 설명",
         "audience_guided_desc": "낯선 기술의 역할·원리·선택 이유 보강",
         "audience": "설명 수준",
+        "approval_title": "에이전트 작업을 언제 승인할까요?",
+        "approval_ask": "승인 요청 (권장)",
+        "approval_ask_desc": "위험한 편집과 명령은 실행 전에 확인",
+        "approval_workspace": "작업 자동 승인",
+        "approval_workspace_desc": "저장소 작업은 각 에이전트의 안전한 자동 승인 사용",
+        "approval": "승인 모드",
         "audience_saved": "설명 수준을 {mode}(으)로 변경했습니다.",
         "audience_applied": "열린 에이전트 패널 {count}개에도 새 기준을 전달했습니다.",
         "audience_usage": "설명 수준: default | nondev | guided",
         "agent_title": "함께 실행할 코딩 에이전트를 선택하세요",
-        "agent_hint": "↑/↓ 이동 · Space 선택 · Enter 저장",
+        "agent_hint": "↑/↓ 이동 · Space 선택 · Enter 저장 · 최대 {max}개",
+        "max_panels": "패널은 최대 {max}개까지 선택할 수 있습니다.",
         "installed": "설치됨",
         "missing": "미설치",
         "none": "하나 이상의 설치된 에이전트를 선택하세요.",
@@ -108,7 +123,7 @@ TEXT = {
         "unknown": "지원하지 않는 에이전트: {name}",
         "not_installed": "{name}이(가) 설치되지 않았습니다. `rondo doctor`로 확인하세요.",
         "need_zellij": "zellij 세션 안에서 실행하세요. 먼저 `rondo`를 실행하면 됩니다.",
-        "need_tty": "대화형 터미널이 필요합니다. 자동 설정은 RONDO_LANG, RONDO_AUDIENCE, RONDO_PANELS, RONDO_RELAY 환경변수를 사용하세요.",
+        "need_tty": "대화형 터미널이 필요합니다. 자동 설정은 RONDO_LANG, RONDO_AUDIENCE, RONDO_APPROVAL, RONDO_PANELS, RONDO_RELAY 환경변수를 사용하세요.",
         "bad_config": "패널 설정이 비었거나 잘못되었습니다. `rondo setup`을 다시 실행하세요.",
         "relay_status": "인계 모드: {mode} · 임계치: 남은 사용량 {threshold}%",
         "relay_packet": "대기 중인 인계: {path}",
@@ -148,6 +163,7 @@ TEXT = {
         "empty_message": "보낼 메시지가 비어 있습니다.",
         "message_too_long": "메시지는 {max}자 이하여야 합니다.",
         "pane_missing": "{name} 패널을 찾지 못했습니다. `rondo add {name}`으로 먼저 여세요.",
+        "pane_exists": "{name} 패널은 이미 열려 있습니다.",
         "pane_lookup_failed": "zellij 패널 정보를 읽지 못했습니다.",
         "sent": "{name} 패널에 메시지를 보냈습니다.",
         "handoff_note": "다음 PC에서 이어갈 작업을 한 줄로 입력하세요: ",
@@ -170,11 +186,35 @@ TEXT = {
         "review_title": "검토 예산 {budget}초 · 우선 확인",
         "review_empty": "필수 사람 검토 항목이 없습니다. 실행 증거 패킷만 확인하면 됩니다.",
         "review_deferred": "시간 예산 밖의 항목 {count}개",
+        "git_usage": "사용법: rondo git [connect <URL> [--replace] | policy [direct|pr|review] | reviewers [에이전트,...]]",
+        "git_not_repo": "현재 폴더는 Git 저장소가 아닙니다. `rondo git connect <URL>`로 연결하세요.",
+        "git_connected": "Git origin을 연결했습니다: {origin}",
+        "git_origin_exists": "origin이 이미 {origin}(으)로 연결되어 있습니다. 변경하려면 --replace를 붙이세요.",
+        "git_status": "Git 연결",
+        "git_origin": "origin",
+        "git_branch": "브랜치",
+        "git_policy": "PR 정책",
+        "git_reviewers": "리뷰 에이전트",
+        "git_policy_title": "이 저장소의 PR 정책을 선택하세요",
+        "git_policy_direct": "직접 작업",
+        "git_policy_direct_desc": "현재 브랜치에서 직접 커밋·푸시 허용",
+        "git_policy_pr": "PR 필수",
+        "git_policy_pr_desc": "기능 브랜치와 Pull Request 사용",
+        "git_policy_review": "PR + 에이전트 리뷰",
+        "git_policy_review_desc": "PR을 만들고 독립 에이전트 리뷰 후 병합",
+        "git_policy_saved": "PR 정책을 {policy}(으)로 저장했습니다.",
+        "git_reviewers_title": "코드 리뷰를 맡을 에이전트를 선택하세요",
+        "git_reviewers_saved": "리뷰 에이전트: {reviewers}",
+        "review_agent_usage": "사용법: rondo code-review [claude|codex|gemini|kimi|grok|all]",
+        "review_agent_started": "독립 코드 리뷰를 시작했습니다: {reviewers}",
+        "pr_dirty": "커밋하지 않은 변경이 있습니다. 먼저 커밋한 뒤 PR을 만드세요.",
+        "pr_default_branch": "기본 브랜치 {branch}에서는 PR을 만들 수 없습니다. 기능 브랜치로 전환하세요.",
+        "pr_review_hint": "PR을 만들었습니다. Rondo 세션에서 `rondo code-review all`로 리뷰를 시작하세요.",
     },
     "en": {
         "usage": """Usage
   rondo                 Open or attach to this project's session
-  rondo setup           Configure language, panes, and continuity relay
+  rondo setup           Change language, panes, approvals, and relay
   rondo audience [mode] Choose explanation level (default|nondev|guided)
   rondo add [agent]     Add a pane to the current session
   rondo send <agent> <message>
@@ -185,6 +225,10 @@ TEXT = {
                         Record intent and acceptance criteria
   rondo proof [--reviewer codex] [--no-checks]
                         Build evidence, risk, and human decisions
+  rondo git [command]   Connect Git and configure PR/reviewer policy
+  rondo code-review [agent|all]
+                        Open independent read-only agent reviews
+  rondo pr [title]      Push this branch and create a policy-aware PR
   rondo review [--budget 2m]
                         Show only what fits the review budget
   rondo lens [URL]      Click a UI element and send its focused context
@@ -209,11 +253,18 @@ Inside a session
         "audience_guided": "Developer · guided",
         "audience_guided_desc": "Add roles, mechanics, rationale, and tradeoffs",
         "audience": "Explanation level",
+        "approval_title": "When should agent work be approved?",
+        "approval_ask": "Ask for approval (recommended)",
+        "approval_ask_desc": "Confirm risky edits and commands before they run",
+        "approval_workspace": "Approve workspace work",
+        "approval_workspace_desc": "Use each agent's safe automatic mode for repository work",
+        "approval": "Approval mode",
         "audience_saved": "Explanation level changed to {mode}.",
         "audience_applied": "Delivered the new guidance to {count} open agent pane(s).",
         "audience_usage": "Explanation level: default | nondev | guided",
         "agent_title": "Choose coding agents to run together",
-        "agent_hint": "↑/↓ move · Space toggle · Enter save",
+        "agent_hint": "↑/↓ move · Space toggle · Enter save · up to {max}",
+        "max_panels": "Choose no more than {max} panes.",
         "installed": "installed",
         "missing": "not installed",
         "none": "Select at least one installed agent.",
@@ -232,7 +283,7 @@ Inside a session
         "unknown": "Unsupported agent: {name}",
         "not_installed": "{name} is not installed. Run `rondo doctor` for details.",
         "need_zellij": "Run this inside a zellij session. Start with `rondo` first.",
-        "need_tty": "An interactive terminal is required. For automation, set RONDO_LANG, RONDO_AUDIENCE, RONDO_PANELS, and RONDO_RELAY.",
+        "need_tty": "An interactive terminal is required. For automation, set RONDO_LANG, RONDO_AUDIENCE, RONDO_APPROVAL, RONDO_PANELS, and RONDO_RELAY.",
         "bad_config": "The pane configuration is empty or invalid. Run `rondo setup` again.",
         "relay_status": "Relay mode: {mode} · threshold: {threshold}% remaining",
         "relay_packet": "Pending relay: {path}",
@@ -272,6 +323,7 @@ Inside a session
         "empty_message": "The message is empty.",
         "message_too_long": "Messages must be {max} characters or fewer.",
         "pane_missing": "No {name} pane was found. Open it with `rondo add {name}` first.",
+        "pane_exists": "The {name} pane is already open.",
         "pane_lookup_failed": "Could not read zellij pane information.",
         "sent": "Message sent to the {name} pane.",
         "handoff_note": "One-line task for the next computer: ",
@@ -294,6 +346,30 @@ Inside a session
         "review_title": "Review budget {budget}s · inspect first",
         "review_empty": "No mandatory human-review item. Inspect the evidence packet only.",
         "review_deferred": "{count} item(s) outside the time budget",
+        "git_usage": "Usage: rondo git [connect <URL> [--replace] | policy [direct|pr|review] | reviewers [agent,...]]",
+        "git_not_repo": "This directory is not a Git repository. Connect it with `rondo git connect <URL>`.",
+        "git_connected": "Connected Git origin: {origin}",
+        "git_origin_exists": "origin is already connected to {origin}. Add --replace to change it.",
+        "git_status": "Git connection",
+        "git_origin": "origin",
+        "git_branch": "Branch",
+        "git_policy": "PR policy",
+        "git_reviewers": "Review agents",
+        "git_policy_title": "Choose this repository's PR policy",
+        "git_policy_direct": "Direct work",
+        "git_policy_direct_desc": "Allow commits and pushes on the current branch",
+        "git_policy_pr": "Require PR",
+        "git_policy_pr_desc": "Use a feature branch and pull request",
+        "git_policy_review": "PR + agent review",
+        "git_policy_review_desc": "Create a PR and review independently before merge",
+        "git_policy_saved": "Saved PR policy: {policy}.",
+        "git_reviewers_title": "Choose code-review agents",
+        "git_reviewers_saved": "Review agents: {reviewers}",
+        "review_agent_usage": "Usage: rondo code-review [claude|codex|gemini|kimi|grok|all]",
+        "review_agent_started": "Started independent code reviews: {reviewers}",
+        "pr_dirty": "Commit the current changes before creating a PR.",
+        "pr_default_branch": "A PR cannot be created from the default branch {branch}. Switch to a feature branch.",
+        "pr_review_hint": "PR created. Run `rondo code-review all` inside Rondo to start reviews.",
     },
 }
 
@@ -341,11 +417,12 @@ def migrate_legacy_config() -> None:
         panels = (LEGACY_CONFIG / "panels").read_text().strip().split()
     except OSError:
         return
-    panels = [name for name in panels if name in AGENTS]
+    panels = [name for name in panels if name in AGENTS][:MAX_PANELS]
     if panels:
         write_setting("panels", " ".join(panels))
         write_setting("language", system_language())
         write_setting("audience", "default")
+        write_setting("approval", "ask")
         write_setting("relay", "ready")
         write_setting("threshold", "1")
 
@@ -403,18 +480,25 @@ def choose_one(title: str, options: list[tuple[str, str]], default: int = 0) -> 
         sys.stdout.flush()
 
 
-def choose_agents(defaults: set[str]) -> list[str]:
+def choose_agents(defaults: set[str], title: str | None = None) -> list[str]:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         value = os.environ.get("RONDO_PANELS", "")
         names = value.replace(",", " ").split()
-        valid = [name for name in names if name in AGENTS and installed(name)]
+        valid = list(dict.fromkeys(
+            name for name in names if name in AGENTS and installed(name)
+        ))
         if not valid:
             raise RuntimeError(t("need_tty"))
+        if len(valid) > MAX_PANELS:
+            raise RuntimeError(t("max_panels", max=MAX_PANELS))
         return valid
 
     names = list(AGENTS)
-    selected = {name for name in defaults if name in AGENTS and installed(name)}
+    selected_names = [name for name in names if name in defaults and installed(name)]
+    selected = set(selected_names[:MAX_PANELS])
     current = 0
+    notice = ""
+    title = title or t("agent_title")
     old = termios.tcgetattr(sys.stdin.fileno()) if not WINDOWS else None
     sys.stdout.write("\x1b[?25l")
     try:
@@ -428,7 +512,7 @@ def choose_agents(defaults: set[str]) -> list[str]:
                 state = t("installed") if available else t("missing")
                 cursor = "›" if i == current else " "
                 rows.append(f"  {cursor} {mark} {name:<8} {AGENTS[name][2]:<24} {state}")
-            _draw(t("agent_title"), rows, t("agent_hint"))
+            _draw(title, rows, notice or t("agent_hint", max=MAX_PANELS))
             key = _read_key()
             if key in ("\x1b[A", "k"):
                 current = (current - 1) % len(names)
@@ -437,11 +521,18 @@ def choose_agents(defaults: set[str]) -> list[str]:
             elif key == " ":
                 name = names[current]
                 if installed(name):
-                    selected.symmetric_difference_update({name})
+                    if name in selected:
+                        selected.remove(name)
+                        notice = ""
+                    elif len(selected) >= MAX_PANELS:
+                        notice = t("max_panels", max=MAX_PANELS)
+                    else:
+                        selected.add(name)
+                        notice = ""
             elif key in ("\r", "\n") and selected:
                 return [name for name in names if name in selected]
             elif key in ("\r", "\n"):
-                _draw(t("agent_title"), rows, t("none"))
+                _draw(title, rows, t("none"))
     finally:
         if old is not None:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
@@ -464,6 +555,13 @@ def audience_options() -> list[tuple[str, str]]:
         ("default", f"{t('audience_default')} — {t('audience_default_desc')}"),
         ("nondev", f"{t('audience_nondev')} — {t('audience_nondev_desc')}"),
         ("guided", f"{t('audience_guided')} — {t('audience_guided_desc')}"),
+    ]
+
+
+def approval_options() -> list[tuple[str, str]]:
+    return [
+        ("ask", f"{t('approval_ask')} — {t('approval_ask_desc')}"),
+        ("workspace", f"{t('approval_workspace')} — {t('approval_workspace_desc')}"),
     ]
 
 
@@ -491,6 +589,17 @@ def setup() -> None:
         default = next(i for i, item in enumerate(options) if item[0] == current_audience)
         audience = choose_one(t("audience_title"), options, default)
 
+    requested_approval = os.environ.get("RONDO_APPROVAL", "").lower()
+    current_approval = approval_lib.selected(CONFIG_DIR)
+    if requested_approval in approval_lib.MODES:
+        approval = requested_approval
+    elif not (sys.stdin.isatty() and sys.stdout.isatty()):
+        approval = current_approval
+    else:
+        options = approval_options()
+        default = next(i for i, item in enumerate(options) if item[0] == current_approval)
+        approval = choose_one(t("approval_title"), options, default)
+
     saved = set(read_setting("panels").split())
     defaults = saved or {name for name in DEFAULT_AGENTS if installed(name)}
     panels = choose_agents(defaults)
@@ -511,12 +620,14 @@ def setup() -> None:
 
     write_setting("language", LANGUAGE)
     write_setting("audience", audience)
+    write_setting("approval", approval)
     write_setting("panels", " ".join(panels))
     write_setting("relay", relay)
     write_setting("threshold", "1")
     print(f"✓ {t('saved')}")
     print(f"  {t('language')}: {'한국어' if LANGUAGE == 'ko' else 'English'}")
     print(f"  {t('audience')}: {audience}")
+    print(f"  {t('approval')}: {approval}")
     print(f"  {t('panels')}: {' '.join(panels)}")
     print(f"  {t('relay')}: {relay}")
     print(t("login"))
@@ -565,12 +676,33 @@ def git_output(root: Path, *args: str, limit: int = 12_000) -> str:
     return result.stdout.strip()[:limit] if result.returncode == 0 else ""
 
 
+def git_policy(root: Path) -> str:
+    value = git_output(root, "config", "--local", "--get", "rondo.prPolicy")
+    return value if value in GIT_POLICIES else "direct"
+
+
+def git_reviewers(root: Path) -> list[str]:
+    value = git_output(root, "config", "--local", "--get", "rondo.reviewers")
+    names = value.replace(",", " ").split()
+    return list(dict.fromkeys(name for name in names if name in AGENTS))[:MAX_PANELS]
+
+
+def default_branch(root: Path) -> str:
+    value = git_output(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    return value.removeprefix("origin/") if value else "main"
+
+
 def rondo_session_name(root: Path, custom_name: str | None = None) -> str:
     identity = f"{git_origin(root) or 'local'}\0{root.resolve()}"
     digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
     label = safe_session_name(custom_name or root.name)
-    label = label[: 80 - len("rondo--") - len(digest)]
+    label = label[: MAX_SESSION_NAME_CHARS - len("rondo--") - len(digest)]
     return f"rondo-{label}-{digest}"
+
+
+def configure_zellij_socket() -> None:
+    if not WINDOWS:
+        os.environ.setdefault("ZELLIJ_SOCKET_DIR", f"/tmp/rondo-{os.getuid()}")
 
 
 def parse_session_list(value: str) -> tuple[set[str], set[str]]:
@@ -593,7 +725,11 @@ def zellij_sessions() -> tuple[set[str], set[str]]:
 
 def configured_panels() -> list[str]:
     values = read_setting("panels").split()
-    if not values or any(name not in AGENTS for name in values):
+    if (
+        not values
+        or len(values) > MAX_PANELS
+        or any(name not in AGENTS for name in values)
+    ):
         raise RuntimeError(t("bad_config"))
     return values
 
@@ -648,6 +784,7 @@ def open_session(
     if shutil.which("zellij") is None:
         raise RuntimeError(t("not_installed", name="zellij"))
     root = repo_root()
+    os.environ["RONDO_GIT_POLICY"] = git_policy(root)
     name = rondo_session_name(root, custom_name)
     active, exited = zellij_sessions()
     if name in active:
@@ -680,6 +817,11 @@ def add_agent(name: str | None) -> None:
         raise RuntimeError(t("not_installed", name=name))
     if not os.environ.get("ZELLIJ"):
         raise RuntimeError(t("need_zellij"))
+    panes = agent_panes()
+    if name in panes:
+        raise RuntimeError(t("pane_exists", name=name))
+    if len(panes) >= MAX_PANELS:
+        raise RuntimeError(t("max_panels", max=MAX_PANELS))
     subprocess.run(["zellij", "action", "go-to-tab-name", "agents"], check=False)
     subprocess.run(["zellij", "action", "move-focus", "down"], check=False)
     os.execvp(
@@ -688,7 +830,7 @@ def add_agent(name: str | None) -> None:
     )
 
 
-def find_agent_pane(name: str, session_name: str | None = None) -> str:
+def agent_panes(session_name: str | None = None) -> dict[str, str]:
     command = ["zellij"]
     if session_name:
         command += ["-s", session_name]
@@ -703,14 +845,23 @@ def find_agent_pane(name: str, session_name: str | None = None) -> str:
         panes = json.loads(result.stdout)
     except (json.JSONDecodeError, TypeError):
         raise RuntimeError(t("pane_lookup_failed")) from None
+    found: dict[str, str] = {}
     for pane in panes:
         if (
             pane.get("tab_name") == "agents"
-            and str(pane.get("title", "")).casefold() == name.casefold()
             and not pane.get("is_plugin")
             and not pane.get("exited")
         ):
-            return str(pane["id"])
+            title = str(pane.get("title", "")).casefold()
+            if title in AGENTS:
+                found[title] = str(pane["id"])
+    return found
+
+
+def find_agent_pane(name: str, session_name: str | None = None) -> str:
+    pane = agent_panes(session_name).get(name.casefold())
+    if pane:
+        return pane
     raise RuntimeError(t("pane_missing", name=name))
 
 
@@ -1064,6 +1215,178 @@ def review_command(args: list[str]) -> int:
     return 0
 
 
+def git_policy_options() -> list[tuple[str, str]]:
+    return [
+        ("direct", f"{t('git_policy_direct')} — {t('git_policy_direct_desc')}"),
+        ("pr", f"{t('git_policy_pr')} — {t('git_policy_pr_desc')}"),
+        ("review", f"{t('git_policy_review')} — {t('git_policy_review_desc')}"),
+    ]
+
+
+def require_git_repo(root: Path) -> None:
+    if git_output(root, "rev-parse", "--is-inside-work-tree") != "true":
+        raise RuntimeError(t("git_not_repo"))
+
+
+def git_command(args: list[str]) -> int:
+    root = repo_root()
+    subcommand = args[0] if args else "status"
+    if subcommand == "connect":
+        values = [value for value in args[1:] if value != "--replace"]
+        if len(values) != 1 or values[0].startswith("-") or any(
+            char in values[0] for char in "\r\n\0"
+        ):
+            raise RuntimeError(t("git_usage"))
+        origin = values[0]
+        if git_output(root, "rev-parse", "--is-inside-work-tree") != "true":
+            subprocess.run(["git", "-C", str(root), "init", "-b", "main"], check=True)
+        current = git_origin(root)
+        if current and "--replace" not in args:
+            raise RuntimeError(t("git_origin_exists", origin=current))
+        action = ["set-url", "origin", origin] if current else ["add", "origin", origin]
+        subprocess.run(["git", "-C", str(root), "remote", *action], check=True)
+        print(t("git_connected", origin=origin))
+        return 0
+
+    require_git_repo(root)
+    if subcommand == "policy":
+        mode = args[1] if len(args) > 1 else None
+        if mode is None:
+            options = git_policy_options()
+            current = git_policy(root)
+            default = next(i for i, item in enumerate(options) if item[0] == current)
+            mode = choose_one(t("git_policy_title"), options, default)
+        if mode not in GIT_POLICIES or len(args) > 2:
+            raise RuntimeError(t("git_usage"))
+        subprocess.run(
+            ["git", "-C", str(root), "config", "--local", "rondo.prPolicy", mode],
+            check=True,
+        )
+        print(t("git_policy_saved", policy=mode))
+        return 0
+
+    if subcommand == "reviewers":
+        if len(args) > 1:
+            names = list(dict.fromkeys(
+                name for value in args[1:] for name in value.replace(",", " ").split()
+            ))
+        else:
+            defaults = set(git_reviewers(root) or configured_panels())
+            names = choose_agents(defaults, t("git_reviewers_title"))
+        if (
+            not names
+            or len(names) > MAX_PANELS
+            or any(name not in AGENTS or not installed(name) for name in names)
+        ):
+            raise RuntimeError(t("review_agent_usage"))
+        subprocess.run(
+            ["git", "-C", str(root), "config", "--local", "rondo.reviewers", " ".join(names)],
+            check=True,
+        )
+        print(t("git_reviewers_saved", reviewers=" ".join(names)))
+        return 0
+
+    if subcommand != "status" or len(args) > 1:
+        raise RuntimeError(t("git_usage"))
+    reviewers = git_reviewers(root) or configured_panels()
+    print(t("git_status"))
+    print(f"  {t('git_origin')}: {git_origin(root) or '-'}")
+    print(f"  {t('git_branch')}: {git_output(root, 'branch', '--show-current') or '-'}")
+    print(f"  {t('git_policy')}: {git_policy(root)}")
+    print(f"  {t('git_reviewers')}: {' '.join(reviewers)}")
+    return 0
+
+
+def code_review_prompt(root: Path) -> str:
+    base = default_branch(root)
+    if LANGUAGE == "ko":
+        return (
+            f"[Rondo code review] 구현 코드를 수정하지 마세요. 현재 브랜치를 {base} 기준으로 "
+            "독립 검토하세요. 실제 diff와 테스트를 확인하고, 실행 가능한 문제만 심각도 순으로 "
+            "파일:줄, 영향, 수정 방법과 함께 보고하세요. 문제가 없으면 없다고 명확히 말하세요."
+        )
+    return (
+        f"[Rondo code review] Do not modify implementation code. Independently review the current "
+        f"branch against {base}. Inspect the actual diff and tests. Report only actionable findings "
+        "in severity order with file:line, impact, and fix; explicitly say when none are found."
+    )
+
+
+def reviewer_argv(name: str, prompt: str) -> list[str]:
+    binary = shutil.which(AGENTS[name][1]) or AGENTS[name][1]
+    flags = {
+        "claude": ["--permission-mode", "plan"],
+        "codex": ["-s", "read-only"],
+        "gemini": ["--mode", "plan", "--prompt-interactive"],
+        "kimi": ["--plan"],
+        "grok": ["--permission-mode", "plan"],
+    }[name]
+    command = [binary, *flags, prompt]
+    if WINDOWS and Path(binary).suffix.lower() in (".cmd", ".bat"):
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *command]
+    return command
+
+
+def code_review_command(args: list[str]) -> int:
+    if not os.environ.get("ZELLIJ_SESSION_NAME"):
+        raise RuntimeError(t("need_zellij"))
+    root = repo_root()
+    require_git_repo(root)
+    requested = args[0] if args else "all"
+    if len(args) > 1 or requested not in (*AGENTS, "all"):
+        raise RuntimeError(t("review_agent_usage"))
+    reviewers = (
+        git_reviewers(root) or configured_panels()
+        if requested == "all"
+        else [requested]
+    )
+    reviewers = [name for name in reviewers if installed(name)][:MAX_PANELS]
+    if not reviewers:
+        raise RuntimeError(t("review_agent_usage"))
+    prompt = code_review_prompt(root)
+    for name in reviewers:
+        subprocess.run(
+            [
+                "zellij", "action", "new-pane", "--name", f"review-{name}",
+                "--cwd", str(root), "--", *reviewer_argv(name, prompt),
+            ],
+            check=True,
+        )
+    print(t("review_agent_started", reviewers=" ".join(reviewers)))
+    return 0
+
+
+def pr_command(args: list[str]) -> int:
+    root = repo_root()
+    require_git_repo(root)
+    if not git_origin(root):
+        raise RuntimeError(t("git_not_repo"))
+    if shutil.which("gh") is None:
+        raise RuntimeError(t("not_installed", name="gh"))
+    if git_output(root, "status", "--porcelain"):
+        raise RuntimeError(t("pr_dirty"))
+    branch = git_output(root, "branch", "--show-current")
+    base = default_branch(root)
+    if not branch or branch in {base, "main", "master"}:
+        raise RuntimeError(t("pr_default_branch", branch=branch or base))
+    subprocess.run(
+        ["git", "-C", str(root), "push", "--set-upstream", "origin", branch],
+        check=True,
+    )
+    command = ["gh", "pr", "create", "--fill"]
+    if git_policy(root) == "review":
+        command.append("--draft")
+    if args:
+        command += ["--title", " ".join(args)]
+    subprocess.run(command, cwd=root, check=True)
+    if git_policy(root) == "review":
+        if os.environ.get("ZELLIJ_SESSION_NAME"):
+            code_review_command(["all"])
+        else:
+            print(t("pr_review_hint"))
+    return 0
+
+
 def open_lens(args: list[str]) -> None:
     exec_script("rondo-lens", *args)
 
@@ -1080,7 +1403,12 @@ def exec_script(name: str, *args: str) -> None:
 
 def doctor(deep: bool = False) -> int:
     print(t("doctor_title"))
-    required = [("python", sys.executable, True), ("zellij", "zellij", True)]
+    required = [
+        ("python", sys.executable, True),
+        ("zellij", "zellij", True),
+        ("git", "git", False),
+        ("gh", "gh", False),
+    ]
     optional = [(name, False) for name in AGENTS]
     failed = False
     for item in required + optional:
@@ -1382,6 +1710,7 @@ def undo_command(args: list[str]) -> int:
 
 
 def main() -> int:
+    configure_zellij_socket()
     args = sys.argv[1:]
     command = args[0] if args else ""
     if command in ("help", "-h", "--help"):
@@ -1406,6 +1735,12 @@ def main() -> int:
         return proof_command(args[1:])
     elif command == "review":
         return review_command(args[1:])
+    elif command == "git":
+        return git_command(args[1:])
+    elif command == "code-review":
+        return code_review_command(args[1:])
+    elif command == "pr":
+        return pr_command(args[1:])
     elif command == "lens":
         open_lens(args[1:])
     elif command == "race":

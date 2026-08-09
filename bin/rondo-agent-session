@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from rondo import audience
+from rondo import approval, audience
 
 AGENTS = {"claude", "codex", "gemini", "kimi", "grok"}
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
@@ -58,27 +58,41 @@ def kimi_agent_file(mode: str, rule: str) -> Path:
 
 
 def session_commands(
-    agent: str, mode: str
+    agent: str, mode: str, approval_mode: str | None = None
 ) -> tuple[list[str] | None, list[str], list[str] | None]:
     rule = audience.instruction(mode)
+    git_policy = os.environ.get("RONDO_GIT_POLICY", "direct")
+    if git_policy in ("pr", "review"):
+        review = " Require independent agent review before merge." if git_policy == "review" else ""
+        rule = " ".join(filter(None, (
+            rule,
+            "[Rondo Git policy] Work on a feature branch and use a pull request. "
+            "Do not push directly to the default branch or merge without the user's explicit request."
+            + review,
+        )))
+    permissions = approval.arguments(
+        agent, approval_mode or approval.selected(CONFIG_DIR)
+    )
     if agent == "claude":
         guidance = ["--append-system-prompt", rule] if rule else []
-        return ["claude", "--continue", *guidance], ["claude", *guidance], None
+        return ["claude", *permissions, "--continue", *guidance], ["claude", *permissions, *guidance], None
     if agent == "codex":
         guidance = (
             ["-c", f"developer_instructions={json.dumps(rule, ensure_ascii=False)}"]
             if rule else []
         )
-        return ["codex", *guidance, "resume", "--last"], ["codex", *guidance], None
+        return ["codex", *permissions, *guidance, "resume", "--last"], ["codex", *permissions, *guidance], None
     if agent == "gemini":
         guidance = ["--prompt-interactive", audience.update_prompt(mode)] if rule else []
-        return None, ["agy", *guidance], None
+        if rule and git_policy in ("pr", "review"):
+            guidance = ["--prompt-interactive", rule]
+        return None, ["agy", *permissions, *guidance], None
     if agent == "grok":
         guidance = ["--rules", rule] if rule else []
-        return None, ["grok", *guidance], None
+        return None, ["grok", *permissions, *guidance], None
     if rule:
-        return None, ["kimi", "--agent-file", str(kimi_agent_file(mode, rule))], ["kimi"]
-    return None, ["kimi"], None
+        return None, ["kimi", *permissions, "--agent-file", str(kimi_agent_file(mode, rule))], ["kimi", *permissions]
+    return None, ["kimi", *permissions], None
 
 
 def run(agent: str, extra: list[str]) -> int:

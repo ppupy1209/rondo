@@ -132,5 +132,5 @@ if ($config -and -not $config.statusLine) {
 
 Write-Host ""
 Write-Host "Rondo installed. Open a new PowerShell window, then run:"
-Write-Host "  rondo setup"
 Write-Host "  rondo"
+Write-Host "Run 'rondo setup' later to change the saved choices."
