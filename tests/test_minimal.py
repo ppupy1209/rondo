@@ -61,7 +61,7 @@ class ProjectCase(unittest.TestCase):
 
 class MinimalCoreTests(ProjectCase):
     def test_version_and_supported_agents_are_deliberately_small(self):
-        self.assertEqual(__version__, "0.15.2")
+        self.assertEqual(__version__, "0.15.3")
         self.assertEqual(core.AGENTS, ("claude", "codex", "gemini"))
         with self.assertRaises(core.RondoError):
             core.normalize_agent("grok")
@@ -224,10 +224,27 @@ class LayoutTests(ProjectCase):
         self.assertNotIn('pane name="Codex"', layout)
         self.assertNotIn('tab name="Claude"', layout)
         self.assertNotIn('tab name="Gemini"', layout)
-        self.assertNotIn("status", layout.lower())
         self.assertNotIn("dashboard", layout.lower())
         self.assertEqual(layout.count("rondo-agent-session"), 2)
         self.assertEqual(layout.count('plugin location="tab-bar"'), 2)
+        self.assertEqual(layout.count('plugin location="status-bar"'), 2)
+
+    def test_three_agents_keep_one_large_pane_and_stack_two(self):
+        cli = load_cli()
+        core.ensure_safe_state_dir(self.root)
+        layout = cli.write_layout(self.root, list(core.AGENTS)).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'pane split_direction="vertical" {\n'
+            '            pane name="Claude"',
+            layout,
+        )
+        self.assertIn(
+            '            pane split_direction="horizontal" {\n'
+            '                pane name="Codex"',
+            layout,
+        )
+        self.assertIn('                pane name="Gemini"', layout)
 
     def test_native_provider_commands_receive_only_coordination_prompt(self):
         with mock.patch.dict(
@@ -271,7 +288,7 @@ class DistributionTests(unittest.TestCase):
     def test_release_version_is_consistent(self):
         for name in ("README.md", "README.en.md", "CHANGELOG.md"):
             text = (ROOT / name).read_text(encoding="utf-8")
-            self.assertIn("0.15.2", text)
+            self.assertIn("0.15.3", text)
 
 
 class CleanupTests(unittest.TestCase):
