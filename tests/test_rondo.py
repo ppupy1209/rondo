@@ -272,6 +272,90 @@ class RondoTests(unittest.TestCase):
         setup.assert_called_once_with()
         self.assertEqual(execvp.call_args.args[1][:3], ["zellij", "-s", "rondo-first"])
 
+    def test_open_directories_adds_parallel_tabs_to_current_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        api = self.base / "api"
+        web = self.base / "web"
+        api.mkdir()
+        web.mkdir()
+        scope = rondo["open_directories"].__globals__
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["subprocess"], "run") as run,
+        ):
+            self.assertEqual(rondo["open_directories"]([str(api), str(web)]), 0)
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            [
+                "zellij", "action", "new-tab",
+                "--name", rondo["directory_tab_name"](api.resolve()),
+                "--cwd", str(api.resolve()),
+            ],
+        )
+        self.assertEqual(run.call_args_list[1].args[0][-1], str(web.resolve()))
+
+    def test_open_directories_starts_one_session_with_all_paths(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        first = self.base / "company" / "service"
+        second = self.base / "personal" / "service"
+        first.mkdir(parents=True)
+        second.mkdir(parents=True)
+        scope = rondo["open_directories"].__globals__
+        with (
+            patch.dict(scope["os"].environ, {}, clear=True),
+            patch.dict(scope, {"zellij_sessions": lambda: (set(), set())}),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                rondo["open_directories"]([str(first), str(second), str(first)])
+
+        command = execvp.call_args.args[1]
+        self.assertEqual(command[:3], ["zellij", "-s", rondo["parallel_session_name"]([first.resolve(), second.resolve()])])
+        layout = Path(command[-1]).read_text()
+        self.assertEqual(layout.count("    tab name="), 2)
+        self.assertIn(json.dumps(str(first.resolve()), ensure_ascii=False), layout)
+        self.assertIn(json.dumps(str(second.resolve()), ensure_ascii=False), layout)
+        self.assertNotEqual(
+            rondo["directory_tab_name"](first.resolve()),
+            rondo["directory_tab_name"](second.resolve()),
+        )
+        self.assertEqual(
+            rondo["parallel_session_name"]([first.resolve(), second.resolve()]),
+            rondo["parallel_session_name"]([second.resolve(), first.resolve()]),
+        )
+
+    def test_open_directories_reattaches_to_its_active_parallel_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        directory = self.base / "api"
+        directory.mkdir()
+        name = rondo["parallel_session_name"]([directory.resolve()])
+        scope = rondo["open_directories"].__globals__
+        with (
+            patch.dict(scope["os"].environ, {}, clear=True),
+            patch.dict(scope, {"zellij_sessions": lambda: ({name}, set())}),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                rondo["open_directories"]([str(directory)])
+
+        execvp.assert_called_once_with("zellij", ["zellij", "attach", name])
+
+    def test_open_directories_rejects_missing_paths_before_starting_zellij(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["open_directories"].__globals__
+        with (
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["subprocess"], "run") as run,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Directory not found"):
+                rondo["open_directories"]([str(self.base / "missing")])
+        run.assert_not_called()
+
     def test_add_refuses_a_fifth_agent_pane(self):
         rondo = load_script("rondo", self.config, self.cache)
         scope = rondo["add_agent"].__globals__

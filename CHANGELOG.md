@@ -2,6 +2,13 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.13.0] - 2026-08-10
+
+### 추가
+
+- `rondo open <디렉터리...>`로 여러 작업 디렉터리를 한 Zellij 터미널의 영속적인 병렬 탭에서 열고 다시 연결하는 기능
+- 같은 이름의 디렉터리 구분, 중복 경로 제거, 존재하지 않는 경로의 사전 차단
+
 ## [0.12.4] - 2026-08-10
 
 ### 수정
@@ -57,6 +64,7 @@
 - 제거 전 전체 대상 사전 검증과 Rondo가 소유한 launcher·hook만 제거
 - 진단 묶음은 허용 목록 기반 메타데이터만 기록하고 기존 파일을 덮어쓰지 않음
 
+[0.13.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.13.0
 [0.12.4]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.4
 [0.12.3]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.3
 [0.12.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.2

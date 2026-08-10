@@ -30,11 +30,12 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.12.4"
+VERSION = "0.13.0"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
 MAX_PANELS = 4
+MAX_OPEN_DIRECTORIES = 12
 GIT_POLICIES = ("direct", "pr", "review")
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
@@ -80,6 +81,7 @@ TEXT = {
   rondo setup           언어·패널·승인·자동 인계 설정 변경
   rondo audience [단계] 설명 수준 선택 (default|nondev|guided)
   rondo add [에이전트]   현재 세션에 패널 추가
+  rondo open <경로...>   여러 디렉터리를 한 터미널의 병렬 탭으로 열기
   rondo send <에이전트> <메시지>
                         대상 패널에 메시지 입력·전송
   rondo handoff [메모]  다른 PC로 옮길 인계 파일 생성
@@ -453,6 +455,10 @@ TEXT = {
         "session_current": "현재 프로젝트",
         "session_killed": "Rondo 세션을 종료했습니다: {name}",
         "kill_usage": "사용법: rondo kill [rondo-세션명]",
+        "open_usage": "사용법: rondo open <디렉터리> [디렉터리...]",
+        "open_not_directory": "디렉터리를 찾을 수 없습니다: {path}",
+        "open_too_many": "한 번에 최대 {max}개 디렉터리를 열 수 있습니다.",
+        "open_started": "디렉터리 {count}개를 병렬 탭으로 열었습니다.",
         "cache_cleaned": "사용하지 않는 로컬 캐시 {count}개를 정리했습니다.",
     },
     "en": {
@@ -463,6 +469,7 @@ TEXT = {
   rondo status          Show repository state and the recommended next action
   rondo audience [mode] Choose explanation level (default|nondev|guided)
   rondo add [agent]     Add a pane to the current session
+  rondo open <paths...> Open directories as parallel tabs in one terminal
   rondo send <agent> <message>
                         Type and submit a message in an agent pane
   rondo handoff [note]  Create a Git-portable handoff file
@@ -837,6 +844,10 @@ Inside a session
         "session_current": "current project",
         "session_killed": "Stopped Rondo session: {name}",
         "kill_usage": "Usage: rondo kill [rondo-session-name]",
+        "open_usage": "Usage: rondo open <directory> [directory...]",
+        "open_not_directory": "Directory not found: {path}",
+        "open_too_many": "Open at most {max} directories at once.",
+        "open_started": "Opened {count} directories as parallel tabs.",
         "cache_cleaned": "Removed {count} unused local cache item(s).",
     },
 }
@@ -1250,6 +1261,90 @@ def write_layout(panels: list[str]) -> Path:
     temp.write_text("\n".join(lines) + "\n")
     temp.replace(target)
     return target
+
+
+def resolve_directories(values: list[str]) -> list[Path]:
+    if not values:
+        raise RuntimeError(t("open_usage"))
+    directories: list[Path] = []
+    seen: set[str] = set()
+    for value in values:
+        try:
+            directory = Path(value).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise RuntimeError(t("open_not_directory", path=value)) from None
+        if not directory.is_dir():
+            raise RuntimeError(t("open_not_directory", path=value))
+        key = os.path.normcase(str(directory))
+        if key not in seen:
+            directories.append(directory)
+            seen.add(key)
+    if len(directories) > MAX_OPEN_DIRECTORIES:
+        raise RuntimeError(t("open_too_many", max=MAX_OPEN_DIRECTORIES))
+    return directories
+
+
+def directory_tab_name(directory: Path) -> str:
+    label = safe_session_name(directory.name or "root")
+    digest = hashlib.sha256(os.path.normcase(str(directory)).encode()).hexdigest()[:5]
+    return f"{label[:48]}-{digest}"
+
+
+def parallel_session_name(directories: list[Path]) -> str:
+    identities = sorted(os.path.normcase(str(path)) for path in directories)
+    digest = hashlib.sha256("\0".join(identities).encode()).hexdigest()[:10]
+    label = safe_session_name(Path(identities[0]).name or "directories")
+    available = MAX_SESSION_NAME_CHARS - len("rondo-parallel--") - len(digest)
+    return f"rondo-parallel-{label[:available]}-{digest}"
+
+
+def write_directory_layout(directories: list[Path], session_name: str) -> Path:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    target = CACHE_DIR / f"{session_name}.kdl"
+    lines = ["layout {"]
+    for index, directory in enumerate(directories):
+        focus = " focus=true" if index == 0 else ""
+        lines.extend([
+            f"    tab name={kdl_string(directory_tab_name(directory))}{focus} {{",
+            f"        pane cwd={kdl_string(str(directory))}",
+            "    }",
+        ])
+    lines.append("}")
+    temp = target.with_suffix(".tmp")
+    temp.write_text("\n".join(lines) + "\n")
+    temp.replace(target)
+    return target
+
+
+def open_directories(values: list[str]) -> int:
+    if shutil.which("zellij") is None:
+        raise RuntimeError(t("not_installed", name="zellij"))
+    directories = resolve_directories(values)
+    if in_zellij():
+        for directory in directories:
+            subprocess.run(
+                [
+                    "zellij", "action", "new-tab",
+                    "--name", directory_tab_name(directory),
+                    "--cwd", str(directory),
+                ],
+                check=True,
+            )
+        print(t("open_started", count=len(directories)))
+        return 0
+
+    name = parallel_session_name(directories)
+    active, exited = zellij_sessions()
+    if name in active:
+        os.execvp("zellij", ["zellij", "attach", name])
+    if name in exited:
+        os.execvp(
+            "zellij", ["zellij", "attach", "--force-run-commands", name]
+        )
+    layout = write_directory_layout(directories, name)
+    print(t("open_started", count=len(directories)))
+    os.execvp("zellij", ["zellij", "-s", name, "-n", str(layout)])
+    return 0
 
 
 def list_sessions() -> None:
@@ -3594,6 +3689,8 @@ def main() -> int:
         setup()
     elif command == "add":
         add_agent(args[1] if len(args) > 1 else None)
+    elif command == "open":
+        return open_directories(args[1:])
     elif command == "send":
         send_agent_message(args[1] if len(args) > 1 else None, args[2:])
     elif command == "handoff":
@@ -3658,7 +3755,7 @@ def main() -> int:
         return support_bundle_command(args[1:])
     elif command:
         known = [
-            "menu", "status", "setup", "add", "send", "handoff", "resume", "task", "learn", "recall", "note", "history", "schedule", "proof", "review",
+            "menu", "status", "setup", "add", "open", "send", "handoff", "resume", "task", "learn", "recall", "note", "history", "schedule", "proof", "review",
             "git", "code-review", "test", "pr", "lens", "race", "diff", "take",
             "snap", "undo", "language", "audience", "relay", "continue", "doctor",
             "update", "rollback", "uninstall", "support-bundle", "kill", "clean",

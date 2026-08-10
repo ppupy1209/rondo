@@ -31,7 +31,7 @@ Rondo is local-first. It reads the files that each installed CLI already stores 
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.4/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.sh | sh
 ```
 
 Python 3.10+ is the only runtime requirement. The installer downloads a fixed Rondo release and Zellij 0.44.3, verifies SHA-256, creates the commands in `~/.local/bin`, and adds that directory to your shell `PATH`.
@@ -41,7 +41,7 @@ Python 3.10+ is the only runtime requirement. The installer downloads a fixed Ro
 Open PowerShell and run:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.4/install.ps1))) -Version v0.12.4
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.ps1))) -Version v0.13.0
 ```
 
 The Windows installer downloads Rondo and native Zellij. If Python 3.10+ is missing, it installs Python through WinGet. WSL is not required. Open a new terminal after installation.
@@ -70,6 +70,7 @@ rondo status      # show current state and one recommended next action
 rondo setup       # change saved language, explanation, approval, agents, and relay
 rondo audience    # change how every agent explains its results
 rondo add         # select and add another agent pane
+rondo open . ../api ../web  # open directories as parallel tabs in one terminal
 rondo send codex "Review the current diff"  # type and submit in the Codex pane
 rondo learn pending  # review project knowledge proposed by users and agents
 rondo recall "authentication"  # search approved knowledge, work history, and Git
@@ -130,6 +131,16 @@ Updates, rollbacks, and removal require an interactive user terminal and are rej
 ```
 
 The first selected agent gets the left half. Additional agents stack on the right. Detaching or closing the terminal does not stop the zellij session.
+
+## Multiple directories in one terminal
+
+Run several projects or monorepo directories together as tabs in one Zellij session instead of opening a terminal window for each one.
+
+```powershell
+rondo open C:\work\api C:\work\web C:\work\worker
+```
+
+Outside Rondo, this creates or reattaches to one persistent session containing every directory. Inside Rondo, it adds tabs to the current terminal. Processes in each tab keep running independently; press `Ctrl+t`, then `←` or `→`, to move between directories. Directories with the same base name receive distinct path-based tab names.
 
 ## Audience-aware explanations
 

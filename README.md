@@ -31,7 +31,7 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.4/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.sh | sh
 ```
 
 필요한 런타임은 Python 3.10 이상뿐입니다. 설치 프로그램은 고정된 Rondo 릴리스와 Zellij 0.44.3을 내려받아 SHA-256을 확인하고, `~/.local/bin`에 명령을 만든 뒤 셸 `PATH`까지 등록합니다.
@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.4/install.sh 
 PowerShell을 열고 다음 한 줄을 실행합니다.
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.12.4/install.ps1))) -Version v0.12.4
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.ps1))) -Version v0.13.0
 ```
 
 Windows 설치 프로그램이 Rondo와 네이티브 Zellij를 내려받습니다. Python 3.10 이상이 없으면 WinGet으로 Python도 설치합니다. WSL은 필요하지 않습니다. 설치 후 새 터미널을 여세요.
@@ -70,6 +70,7 @@ rondo status      # 현재 상태와 다음 권장 작업을 한 번에 확인
 rondo setup       # 저장된 언어·설명·승인·에이전트·인계 설정 변경
 rondo audience    # 모든 에이전트의 결과 설명 수준 변경
 rondo add         # 에이전트를 선택해 패널 추가
+rondo open . ../api ../web  # 여러 디렉터리를 한 터미널의 병렬 탭으로 열기
 rondo send codex "현재 diff를 검토해 주세요"  # Codex 패널에 입력하고 전송
 rondo learn pending  # 에이전트와 사용자가 제안한 프로젝트 지식 검토
 rondo recall "인증"  # 승인 지식·작업 이력·최근 Git 커밋 검색
@@ -130,6 +131,16 @@ rondo support-bundle          # 원문 없는 비공개 진단 zip 생성
 ```
 
 첫 번째 에이전트는 왼쪽 절반을 쓰고 나머지는 오른쪽에 세로로 쌓입니다. 터미널을 닫거나 디태치해도 zellij 세션은 계속 살아 있습니다.
+
+## 여러 디렉터리를 한 터미널에서
+
+여러 프로젝트나 모노레포 하위 디렉터리를 각각 별도 터미널로 열 필요 없이 한 Zellij 세션의 탭으로 함께 실행할 수 있습니다.
+
+```powershell
+rondo open C:\work\api C:\work\web C:\work\worker
+```
+
+Rondo 바깥에서 실행하면 모든 디렉터리를 담은 영속 세션을 만들거나 기존 세션에 다시 붙습니다. 이미 Rondo 안이라면 현재 터미널에 새 탭을 추가합니다. 각 탭의 프로세스는 독립적으로 계속 실행되며 `Ctrl+t` 다음 `←`/`→`로 디렉터리 사이를 이동합니다. 같은 이름의 디렉터리도 경로별 고유 탭 이름으로 구분합니다.
 
 ## 사용자 수준에 맞춘 설명
 
