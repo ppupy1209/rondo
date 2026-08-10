@@ -8,7 +8,7 @@ MODES = ("ask", "workspace")
 
 WORKSPACE_ARGUMENTS = {
     "claude": ["--permission-mode", "acceptEdits"],
-    "codex": ["--approve-for-me"],
+    "codex": ["--sandbox", "workspace-write", "--ask-for-approval", "never"],
     "gemini": ["--mode", "accept-edits"],
     "kimi": ["--auto"],
     "grok": ["--permission-mode", "auto"],

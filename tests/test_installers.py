@@ -74,6 +74,12 @@ try {{
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_windows_launchers_add_their_bin_directory_to_path(self) -> None:
+        source = (ROOT / "install.ps1").read_text(encoding="utf-8")
+        self.assertEqual(source.count('set `"PATH=%~dp0;%PATH%`"'), 2)
+        self.assertIn("Run now in this PowerShell", source)
+        self.assertIn("close all terminal windows", source)
+
     def test_readme_install_urls_match_the_cli_version(self) -> None:
         version = subprocess.run(
             [sys.executable, str(ROOT / "bin" / "rondo"), "--version"],

@@ -31,7 +31,7 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.sh | sh
 ```
 
 필요한 런타임은 Python 3.10 이상뿐입니다. 설치 프로그램은 고정된 Rondo 릴리스와 Zellij 0.44.3을 내려받아 SHA-256을 확인하고, `~/.local/bin`에 명령을 만든 뒤 셸 `PATH`까지 등록합니다.
@@ -41,10 +41,10 @@ curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.sh 
 PowerShell을 열고 다음 한 줄을 실행합니다.
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.ps1))) -Version v0.13.0
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.ps1))) -Version v0.13.1
 ```
 
-Windows 설치 프로그램이 Rondo와 네이티브 Zellij를 내려받습니다. Python 3.10 이상이 없으면 WinGet으로 Python도 설치합니다. WSL은 필요하지 않습니다. 설치 후 새 터미널을 여세요.
+Windows 설치 프로그램이 Rondo와 네이티브 Zellij를 내려받습니다. Python 3.10 이상이 없으면 WinGet으로 Python도 설치합니다. WSL은 필요하지 않습니다. 설치 명령을 실행한 같은 PowerShell에서 바로 `rondo`를 실행할 수 있습니다. 다른 터미널에서 명령을 찾지 못하면 열려 있는 터미널 창을 모두 닫고 다시 여세요.
 
 운영체제와 관계없이 실제로 사용할 에이전트 CLI를 하나 이상 설치하면 됩니다. 모든 지원 CLI를 설치할 필요는 없으며, setup에서 현재 설치된 에이전트를 자동으로 찾습니다.
 
@@ -169,7 +169,7 @@ setup에서 고른 승인 모드는 모든 에이전트의 네이티브 옵션�
 | 모드 | 동작 |
 |---|---|
 | `ask` | 위험한 편집과 명령을 실행하기 전에 사용자에게 확인하는 기본값 |
-| `workspace` | Claude `acceptEdits`, Codex `approve-for-me` 등 각 CLI의 작업공간 자동 승인 사용 |
+| `workspace` | Claude `acceptEdits`, Codex `workspace-write` 등 각 CLI의 작업공간 자동 승인 사용 |
 
 `workspace`는 반복 승인을 줄이지만 Kimi·Grok 등 공급자에 따라 자동 승인되는 명령 범위가 더 넓을 수 있습니다. 신뢰하는 저장소에서만 사용하세요. 샌드박스를 완전히 해제하는 권한 우회 모드는 Rondo에서 제공하지 않습니다. 설정을 바꾸면 다음에 시작하거나 복원되는 모든 에이전트 패널부터 같은 모드가 적용됩니다.
 

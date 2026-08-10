@@ -205,7 +205,7 @@ if (-not $Zellij -and -not (Test-Path (Join-Path $Bin "zellij.exe"))) {
 function Write-PythonLauncher([string]$Name, [string]$Script) {
     $target = Join-Path $Bin "$Name.cmd"
     $source = Join-Path $Repo "bin\$Script"
-    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`n`"$Python`" `"$source`" %*`r`n"
+    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`nset `"PATH=%~dp0;%PATH%`"`r`n`"$Python`" `"$source`" %*`r`n"
     [IO.File]::WriteAllText($target, $content, [Text.UTF8Encoding]::new($false))
 }
 
@@ -220,7 +220,7 @@ function Write-PythonLauncher([string]$Name, [string]$Script) {
 function Write-AgentLauncher([string]$Name, [string]$Agent) {
     $target = Join-Path $Bin "$Name.cmd"
     $source = Join-Path $Repo "bin\rondo-agent-session"
-    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`n`"$Python`" `"$source`" $Agent %*`r`n"
+    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`nset `"PATH=%~dp0;%PATH%`"`r`n`"$Python`" `"$source`" $Agent %*`r`n"
     [IO.File]::WriteAllText($target, $content, [Text.UTF8Encoding]::new($false))
 }
 
@@ -249,6 +249,7 @@ if ($config -and -not $config.statusLine) {
 }
 
 Write-Host ""
-Write-Host "Rondo installed. Open a new PowerShell window, then run:"
+Write-Host "Rondo installed. Run now in this PowerShell:"
 Write-Host "  rondo"
+Write-Host "If another terminal cannot find 'rondo', close all terminal windows and reopen one."
 Write-Host "Run 'rondo setup' later to change the saved choices."

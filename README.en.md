@@ -31,7 +31,7 @@ Rondo is local-first. It reads the files that each installed CLI already stores 
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.sh | sh
 ```
 
 Python 3.10+ is the only runtime requirement. The installer downloads a fixed Rondo release and Zellij 0.44.3, verifies SHA-256, creates the commands in `~/.local/bin`, and adds that directory to your shell `PATH`.
@@ -41,10 +41,10 @@ Python 3.10+ is the only runtime requirement. The installer downloads a fixed Ro
 Open PowerShell and run:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.0/install.ps1))) -Version v0.13.0
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.ps1))) -Version v0.13.1
 ```
 
-The Windows installer downloads Rondo and native Zellij. If Python 3.10+ is missing, it installs Python through WinGet. WSL is not required. Open a new terminal after installation.
+The Windows installer downloads Rondo and native Zellij. If Python 3.10+ is missing, it installs Python through WinGet. WSL is not required. You can run `rondo` immediately in the same PowerShell that ran the installer. If another terminal cannot find the command, close all terminal windows and reopen one.
 
 On every platform, install at least one agent CLI you want to use. Rondo discovers the installed agents during setup; you do not need to install every supported CLI.
 
@@ -169,7 +169,7 @@ Rondo translates the setup choice into each agent's native approval option.
 | Mode | Behavior |
 |---|---|
 | `ask` | Default: confirm risky edits and commands before execution |
-| `workspace` | Use each CLI's workspace automatic mode, such as Claude `acceptEdits` and Codex `approve-for-me` |
+| `workspace` | Use each CLI's workspace automatic mode, such as Claude `acceptEdits` and Codex `workspace-write` |
 
 `workspace` removes repetitive confirmations, but providers such as Kimi and Grok can automatically approve a wider command set. Use it only in a trusted repository. Rondo does not offer a mode that completely disables the sandbox. A changed setting applies consistently to every agent pane started or restored afterward.
 

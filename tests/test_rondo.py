@@ -1361,7 +1361,12 @@ class AgentSessionTests(unittest.TestCase):
     def test_workspace_approval_uses_each_cli_native_mode(self):
         commands = self.runner["session_commands"]
         self.assertIn("acceptEdits", commands("claude", "default", "workspace")[1])
-        self.assertIn("--approve-for-me", commands("codex", "default", "workspace")[1])
+        codex = commands("codex", "default", "workspace")[1]
+        self.assertIn("--sandbox", codex)
+        self.assertIn("workspace-write", codex)
+        self.assertIn("--ask-for-approval", codex)
+        self.assertIn("never", codex)
+        self.assertNotIn("--approve-for-me", codex)
         self.assertIn("accept-edits", commands("gemini", "default", "workspace")[1])
         self.assertIn("--auto", commands("kimi", "default", "workspace")[1])
         self.assertIn("auto", commands("grok", "default", "workspace")[1])

@@ -2,6 +2,13 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.13.1] - 2026-08-10
+
+### 수정
+
+- 최신 Codex CLI에서 제거된 `--approve-for-me` 대신 `workspace-write` 샌드박스와 현재 승인 옵션을 사용해 Windows 패널이 즉시 종료되는 문제 수정
+- Windows launcher가 설치 폴더를 자체 PATH에 추가해 새 터미널의 환경 갱신 여부와 관계없이 함께 설치된 Zellij를 찾도록 변경
+
 ## [0.13.0] - 2026-08-10
 
 ### 추가
@@ -64,6 +71,7 @@
 - 제거 전 전체 대상 사전 검증과 Rondo가 소유한 launcher·hook만 제거
 - 진단 묶음은 허용 목록 기반 메타데이터만 기록하고 기존 파일을 덮어쓰지 않음
 
+[0.13.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.13.1
 [0.13.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.13.0
 [0.12.4]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.4
 [0.12.3]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.3
