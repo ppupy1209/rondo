@@ -73,3 +73,7 @@ try {
     }
     if (Test-Path -LiteralPath $Temp) { Remove-Item -LiteralPath $Temp -Recurse -Force }
 }
+
+# Cleanup commands may legitimately report that the already-exited session is
+# absent. Do not leak that native status after the lifecycle assertions passed.
+$global:LASTEXITCODE = 0
