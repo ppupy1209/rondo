@@ -31,7 +31,7 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.1/install.sh | sh
 ```
 
 필요한 런타임은 Python 3.10 이상뿐입니다. 설치 프로그램은 고정된 Rondo 릴리스와 Zellij 0.44.3을 내려받아 SHA-256을 확인하고, `~/.local/bin`에 명령을 만든 뒤 셸 `PATH`까지 등록합니다.
@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.0/install.sh 
 PowerShell을 열고 다음 한 줄을 실행합니다.
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.0/install.ps1))) -Version v0.14.0
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.1/install.ps1))) -Version v0.14.1
 ```
 
 Windows 설치 프로그램이 Rondo와 네이티브 Zellij를 내려받습니다. Python 3.10 이상이 없으면 WinGet으로 Python도 설치합니다. WSL은 필요하지 않습니다. 설치 명령을 실행한 같은 PowerShell에서 바로 `rondo`를 실행할 수 있습니다. 다른 터미널에서 명령을 찾지 못하면 열려 있는 터미널 창을 모두 닫고 다시 여세요.
