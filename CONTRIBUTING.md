@@ -4,15 +4,15 @@ Rondo 0.15의 범위는 의도적으로 작습니다. 변경은 Codex·Claude·G
 
 ## 커밋 신원
 
-이 저장소의 모든 author, committer, annotated tag tagger는 다음 값만 허용합니다.
+새 커밋과 annotated tag는 다음 신원만 사용합니다.
 
 ```sh
-git config user.name "Yeonwoo Kim"
+git config user.name "yeonwoo"
 git config user.email "ppupy1209@naver.com"
 git config core.hooksPath .githooks
 ```
 
-커밋 전 `python3 scripts/check_identity.py --current`, CI에서는 전체 이력을 `--all`로 검사합니다. 다른 회사·개인 계정 주소가 포함된 커밋은 받지 않습니다.
+커밋 전 `python3 scripts/check_identity.py --current`, CI에서는 전체 이력을 `--all`로 검사합니다. 기존 `Yeonwoo Kim <ppupy1209@naver.com>` 커밋은 이전 신원으로 인정하지만 새 커밋에는 사용할 수 없습니다. GitHub 리베이스 병합도 프로필명 `yeonwoo`로 기록되므로 같은 정책을 만족합니다. 다른 이름이나 이메일이 포함된 커밋은 받지 않습니다.
 
 ## 확인 절차
 

@@ -7,7 +7,9 @@ import re
 import subprocess
 import sys
 
-ALLOWED_NAME = "Yeonwoo Kim"
+CANONICAL_NAME = "yeonwoo"
+LEGACY_NAMES = frozenset({"Yeonwoo Kim"})
+HISTORY_NAMES = LEGACY_NAMES | {CANONICAL_NAME}
 ALLOWED_EMAIL = "ppupy1209@naver.com"
 
 
@@ -31,8 +33,11 @@ def current_errors() -> list[str]:
     errors: list[str] = []
     for label, variable in (("author", "GIT_AUTHOR_IDENT"), ("committer", "GIT_COMMITTER_IDENT")):
         name, email = identity(git("var", variable))
-        if name != ALLOWED_NAME or email != ALLOWED_EMAIL:
+        if name != CANONICAL_NAME or email != ALLOWED_EMAIL:
             errors.append(f"current {label}: {name or '?'} <{email or '?'}>")
+    local_name = git("config", "--local", "--get", "user.name").strip()
+    if local_name != CANONICAL_NAME:
+        errors.append(f"repository user.name: {local_name or 'not set'}")
     local_email = git("config", "--local", "--get", "user.email").strip().casefold()
     if local_email != ALLOWED_EMAIL:
         errors.append(f"repository user.email: {local_email or 'not set'}")
@@ -48,9 +53,9 @@ def history_errors() -> list[str]:
             errors.append("unparseable commit identity")
             continue
         sha, author, author_email, committer, committer_email = fields
-        if author != ALLOWED_NAME or author_email.casefold() != ALLOWED_EMAIL:
+        if author not in HISTORY_NAMES or author_email.casefold() != ALLOWED_EMAIL:
             errors.append(f"commit {sha[:12]} author: {author} <{author_email}>")
-        if committer != ALLOWED_NAME or committer_email.casefold() != ALLOWED_EMAIL:
+        if committer not in HISTORY_NAMES or committer_email.casefold() != ALLOWED_EMAIL:
             errors.append(f"commit {sha[:12]} committer: {committer} <{committer_email}>")
 
     tags = git(
@@ -62,7 +67,7 @@ def history_errors() -> list[str]:
         if kind != "tag":
             continue
         email = email.strip().removeprefix("<").removesuffix(">").casefold()
-        if tagger != ALLOWED_NAME or email != ALLOWED_EMAIL:
+        if tagger not in HISTORY_NAMES or email != ALLOWED_EMAIL:
             errors.append(f"tag {tag} tagger: {tagger} <{email}>")
     return errors
 
@@ -79,13 +84,13 @@ def main() -> int:
         print(f"identity check failed: {error}", file=sys.stderr)
         return 2
     if errors:
-        print(f"Rondo commits must use {ALLOWED_NAME} <{ALLOWED_EMAIL}>.", file=sys.stderr)
+        print(f"New Rondo commits must use {CANONICAL_NAME} <{ALLOWED_EMAIL}>.", file=sys.stderr)
         for error in errors[:20]:
             print(f"  - {error}", file=sys.stderr)
         if len(errors) > 20:
             print(f"  - and {len(errors) - 20} more", file=sys.stderr)
         return 1
-    print(f"commit identity: {ALLOWED_NAME} <{ALLOWED_EMAIL}>")
+    print(f"commit identity: {CANONICAL_NAME} <{ALLOWED_EMAIL}>")
     return 0
 
 
