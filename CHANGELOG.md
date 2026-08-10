@@ -2,6 +2,14 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/), 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 따릅니다.
 
+## [0.15.3] - 2026-08-10
+
+### 변경
+
+- AI 두 개는 좌우로, 세 개는 왼쪽 큰 패널과 오른쪽 위아래 패널로 배치
+- 모든 탭 하단에 Zellij 단축키 상태 표시줄 추가
+- 터미널 글꼴에서 특수 문자가 깨지지 않도록 Zellij 단순 UI 활성화
+
 ## [0.15.2] - 2026-08-10
 
 ### 변경
@@ -49,6 +57,7 @@ Rondo를 Codex CLI, Claude Code, Gemini CLI의 가벼운 보조 도구로 다시
 
 이전 릴리스 기록은 [GitHub Releases](https://github.com/ppupy1209/rondo/releases)에서 확인할 수 있습니다.
 
+[0.15.3]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.3
 [0.15.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.2
 [0.15.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.1
 [0.15.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.0

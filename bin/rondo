@@ -52,21 +52,39 @@ def write_layout(root: Path, agents: List[str]) -> Path:
         "        pane size=1 borderless=true {",
         "            plugin location=\"tab-bar\"",
         "        }",
-        "        pane split_direction=\"vertical\" {",
     ]
-    for index, agent in enumerate(agents):
+
+    def append_agent(agent: str, index: int, indent: int) -> None:
+        prefix = " " * indent
         focus = " focus=true" if index == 0 else ""
         lines.extend(
             [
-                "            pane name=%s command=%s cwd=%s%s {" % (
+                "%spane name=%s command=%s cwd=%s%s {" % (
+                    prefix,
                     kdl(core.display_name(agent)), python, kdl(str(root)), focus
                 ),
-                "                args %s %s" % (agent_session, kdl(agent)),
-                "            }",
+                "%s    args %s %s" % (prefix, agent_session, kdl(agent)),
+                "%s}" % prefix,
             ]
         )
+
+    if len(agents) == 3:
+        lines.append("        pane split_direction=\"vertical\" {")
+        append_agent(agents[0], 0, 12)
+        lines.append("            pane split_direction=\"horizontal\" {")
+        for index, agent in enumerate(agents[1:], start=1):
+            append_agent(agent, index, 16)
+        lines.extend(["            }", "        }"])
+    else:
+        lines.append("        pane split_direction=\"vertical\" {")
+        for index, agent in enumerate(agents):
+            append_agent(agent, index, 12)
+        lines.append("        }")
+
     lines.extend(
         [
+            "        pane size=1 borderless=true {",
+            "            plugin location=\"status-bar\"",
             "        }",
             "    }",
             "    tab name=\"Relay\" {",
@@ -75,6 +93,9 @@ def write_layout(root: Path, agents: List[str]) -> Path:
             "        }",
             "        pane name=\"Relay\" command=%s cwd=%s {" % (python, kdl(str(root))),
             "            args %s" % relay,
+            "        }",
+            "        pane size=1 borderless=true {",
+            "            plugin location=\"status-bar\"",
             "        }",
             "    }",
             "}",
@@ -206,11 +227,17 @@ def open_session(root: Path) -> int:
     os.environ["RONDO_PROJECT_ROOT"] = str(root)
     os.environ["RONDO_ZELLIJ_SESSION"] = name
     if core.zellij_session_exists(name):
-        return subprocess.call([zellij, "attach", name, "options", "--mouse-mode", "true", "--default-mode", "normal"])
+        return subprocess.call([
+            zellij, "attach", name, "options", "--mouse-mode", "true",
+            "--default-mode", "normal", "--simplified-ui", "true",
+        ])
     core.cleanup_stale_windows_marker(name)
     layout = write_layout(root, config["agents"])
     return subprocess.call(
-        [zellij, "-s", name, "-n", str(layout), "options", "--mouse-mode", "true", "--default-mode", "normal"],
+        [
+            zellij, "-s", name, "-n", str(layout), "options", "--mouse-mode", "true",
+            "--default-mode", "normal", "--simplified-ui", "true",
+        ],
         cwd=str(root),
     )
 

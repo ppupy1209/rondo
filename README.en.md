@@ -19,13 +19,13 @@ Install and sign in to at least one official provider CLI first: `codex`, `claud
 Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.2/install.ps1))) -Version v0.15.2
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.3/install.ps1))) -Version v0.15.3
 ```
 
 macOS / Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.2/install.sh | RONDO_VERSION=v0.15.2 sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.3/install.sh | RONDO_VERSION=v0.15.3 sh
 ```
 
 The installer checks for Python 3.10+ and installs a SHA-256-verified Zellij 0.44.3 build. It never installs or updates provider CLIs.
@@ -34,7 +34,9 @@ The installer checks for Python 3.10+ and installs a SHA-256-verified Zellij 0.4
 
 Run `rondo` in any project directory. On the first run, move with the arrow keys, toggle AIs with `Space`, and finish with `Enter`; no agent names need to be typed. Later runs enter that project's tabs immediately.
 
-Enabled Claude, Codex, and Gemini CLIs share one `Agents` tab as equal-width split panes. Click a pane or press `Ctrl+p` followed by an arrow key to move between AIs. Relay remains a separate tab; use `Ctrl+t` followed by an arrow key to switch to it. Rondo starts Zellij with mouse support enabled and normal mode selected.
+With two AIs, Rondo places them side by side in the `Agents` tab. With three, the first AI gets a large pane on the left and the other two are stacked on the right. Click a pane or press `Ctrl+p` followed by an arrow key to move between AIs. Press `Ctrl+p`, then `f` to toggle the focused pane fullscreen.
+
+Relay remains a separate tab; use `Ctrl+t` followed by an arrow key to switch to it. Zellij's status bar stays visible at the bottom with available shortcuts. Press `Ctrl+o`, then `d` to detach while keeping the session, or `Ctrl+q` to stop the AIs and session. Rondo enables Zellij's font-compatible simplified UI, mouse support, and normal mode.
 
 On macOS and Linux, Rondo uses a short private Zellij socket path so long project or temporary paths cannot trigger the misleading `session name must be less than 0 characters` error.
 
