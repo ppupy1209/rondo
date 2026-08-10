@@ -34,5 +34,5 @@ SOFTWARE.
 ```
 
 Rondo is an independent project. It is not affiliated with or endorsed by
-Zellij, OpenAI, Anthropic, Google, Moonshot AI, xAI, or their affiliates.
+Zellij, OpenAI, Anthropic, Google, or their affiliates.
 Product names and trademarks belong to their respective owners.

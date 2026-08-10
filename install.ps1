@@ -165,7 +165,7 @@ if ($LocalRepo) {
             if (Test-Path -LiteralPath $Previous) {
                 Remove-Item -LiteralPath $Previous -Recurse -Force
             }
-            Move-Item -LiteralPath $Staging -Destination $Previous
+            Remove-Item -LiteralPath $Staging -Recurse -Force
         }
     } finally {
         if (Test-Path -LiteralPath $Temp) { Remove-Item -LiteralPath $Temp -Recurse -Force }
@@ -225,30 +225,31 @@ function Write-ManagedLauncher([string]$Target, [string]$Content) {
 function Write-PythonLauncher([string]$Name, [string]$Script) {
     $target = Join-Path $Bin "$Name.cmd"
     $source = Join-Path $Repo "bin\$Script"
-    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`nset `"PATH=%~dp0;%PATH%`"`r`n`"$Python`" `"$source`" %*`r`n"
+    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`nset `"RONDO_ZELLIJ_PATH=%~dp0zellij.exe`"`r`nset `"PATH=%~dp0;%PATH%`"`r`n`"$Python`" `"$source`" %*`r`n"
     Write-ManagedLauncher $target $content
 }
 
 @{
-    "rondo" = "rondo"; "ai" = "rondo";
-    "ai-status" = "ai-status"; "rondo-status" = "ai-status";
-    "rondo-claude-status" = "rondo-claude-status"; "claude-statusline" = "rondo-claude-status";
-    "rondo-lens" = "rondo-lens"; "rondo-relay" = "rondo-relay";
+    "rondo" = "rondo"
+    "rondo-relay" = "rondo-relay"
     "rondo-agent-session" = "rondo-agent-session"
 }.GetEnumerator() | ForEach-Object { Write-PythonLauncher $_.Key $_.Value }
 
-function Write-AgentLauncher([string]$Name, [string]$Agent) {
+function Remove-LegacyManagedLauncher([string]$Name) {
     $target = Join-Path $Bin "$Name.cmd"
-    $source = Join-Path $Repo "bin\rondo-agent-session"
-    $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`nset `"PATH=%~dp0;%PATH%`"`r`n`"$Python`" `"$source`" $Agent %*`r`n"
-    Write-ManagedLauncher $target $content
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { return }
+    if (Test-ReparsePoint $target) { return }
+    $content = Get-Content -LiteralPath $target -Raw
+    $managed = $content.StartsWith("@rem Rondo managed launcher v1") -or
+        ($content.StartsWith("@echo off") -and $content.Contains('set "PATH=%~dp0;%PATH%"'))
+    if ($managed) { Remove-Item -LiteralPath $target -Force }
 }
 
-Write-AgentLauncher "claude-session" "claude"
-Write-AgentLauncher "codex-session" "codex"
-Write-AgentLauncher "agy-session" "gemini"
-Write-AgentLauncher "kimi-session" "kimi"
-Write-AgentLauncher "grok-session" "grok"
+@(
+    "ai", "ai-status", "rondo-status", "rondo-claude-status", "claude-statusline",
+    "rondo-lens", "claude-session", "codex-session", "agy-session", "kimi-session",
+    "grok-session", "handoff"
+) | ForEach-Object { Remove-LegacyManagedLauncher $_ }
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if (($userPath -split ";") -notcontains $Bin) {
@@ -256,20 +257,11 @@ if (($userPath -split ";") -notcontains $Bin) {
 }
 $env:Path = "$Bin;$env:Path"
 
-$ClaudeSettings = Join-Path $HOME ".claude\settings.json"
-if (Test-Path $ClaudeSettings) {
-    try { $config = Get-Content $ClaudeSettings -Raw | ConvertFrom-Json } catch { $config = $null }
-} else {
-    $config = [pscustomobject]@{}
-}
-if ($config -and -not $config.statusLine) {
-    $config | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{type="command"; command="rondo-claude-status"; refreshInterval=5})
-    New-Item -ItemType Directory -Force -Path (Split-Path $ClaudeSettings) | Out-Null
-    $config | ConvertTo-Json -Depth 20 | Set-Content $ClaudeSettings -Encoding UTF8
-}
+$Cleanup = Join-Path $Repo "lib\rondo\cleanup.py"
+if (Test-Path -LiteralPath $Cleanup -PathType Leaf) { & $Python $Cleanup }
 
 Write-Host ""
 Write-Host "Rondo installed. Run now in this PowerShell:"
 Write-Host "  rondo"
 Write-Host "If another terminal cannot find 'rondo', close all terminal windows and reopen one."
-Write-Host "Run 'rondo setup' later to change the saved choices."
+Write-Host "The first run asks which installed CLIs to use. Change them later with 'rondo setup'."

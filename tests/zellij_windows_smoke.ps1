@@ -1,89 +1,108 @@
 $ErrorActionPreference = "Stop"
 
 $ZellijCommand = Get-Command zellij.exe -ErrorAction SilentlyContinue
-$Zellij = if ($ZellijCommand) {
-    $ZellijCommand.Source
-} else {
-    Join-Path $env:LOCALAPPDATA "Rondo\bin\zellij.exe"
-}
+$Zellij = if ($ZellijCommand) { $ZellijCommand.Source } else { Join-Path $env:LOCALAPPDATA "Rondo\bin\zellij.exe" }
 if (-not (Test-Path -LiteralPath $Zellij -PathType Leaf)) { throw "zellij.exe is required" }
 $Python = (Get-Command python.exe -ErrorAction Stop).Source
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$Name = "rondo-win-e2e-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
-$Temp = Join-Path $env:TEMP $Name
-$Repo = Join-Path $Temp "repo"
-$Layout = Join-Path $Temp "layout.kdl"
-$Fake = Join-Path $Root "tests\fixtures\fake_agent.py"
-New-Item -ItemType Directory -Force -Path $Repo | Out-Null
+$Launcher = Join-Path $env:LOCALAPPDATA "Rondo\bin\rondo.cmd"
+if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) { throw "installed rondo.cmd is required" }
+$Token = [guid]::NewGuid().ToString('N').Substring(0, 10)
+$Temp = Join-Path $Root "tests\.windows-smoke-$Token"
+$Workspace = Join-Path $Temp "project"
+$Fake = Join-Path $Temp "fake-codex.cmd"
+New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
+& git init -q $Workspace
+[IO.File]::WriteAllText(
+    $Fake,
+    "@echo off`r`n`"$Python`" `"$(Join-Path $Root 'tests\fixtures\fake_agent.py')`" %*`r`n",
+    [Text.UTF8Encoding]::new($false)
+)
 
-function Invoke-Zellij([string[]]$Arguments) {
-    $output = & $Zellij @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) { throw ($output -join "`n") }
-    return $output
+function Session-Names {
+    return @((& $Zellij list-sessions --short 2>$null) | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
-function Wait-Screen([string]$Marker) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(30)
-    $last = "session did not start"
+function Wait-Screen([string]$Name, [string]$Title, [string]$Marker) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(35)
+    $last = "pane did not register"
+    $statePath = Join-Path $Workspace ".rondo\state.json"
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
-            $panes = (Invoke-Zellij @("-s", $Name, "action", "list-panes", "--json")) | ConvertFrom-Json
-            $pane = $panes | Where-Object { $_.title -eq "codex" } | Select-Object -First 1
-            if ($pane) {
-                $last = (Invoke-Zellij @("-s", $Name, "action", "dump-screen", "--pane-id", [string]$pane.id)) -join "`n"
-                if ($last.Contains($Marker)) { return $pane }
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $paneId = ""
+            if ($Title -eq "Relay") {
+                if ($state.relay.status -eq "active") { $paneId = [string]$state.relay.pane_id }
+            } else {
+                $wanted = $Title.ToLowerInvariant()
+                $session = $state.sessions.PSObject.Properties | ForEach-Object { $_.Value } |
+                    Where-Object { $_.agent -eq $wanted -and $_.status -eq "active" } | Select-Object -Last 1
+                if ($session) { $paneId = [string]$session.pane_id }
             }
-        } catch { $last = $_.Exception.Message }
+            if ($paneId) {
+                $last = (& $Python -c "import subprocess,sys; p=subprocess.run([sys.argv[1],'-s',sys.argv[2],'action','dump-screen','--pane-id',sys.argv[3]],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=3); sys.stdout.write(p.stdout)" $Zellij $Name $paneId 2>$null) -join "`n"
+                if ($last.Contains($Marker)) { return }
+            }
+        } catch {
+            $sessions = (Session-Names) -join ", "
+            $last = "$($_.Exception.Message) (expected=$Name; sessions=$sessions)"
+        }
         Start-Sleep -Milliseconds 250
     }
-    throw "Windows Zellij smoke timed out: $last"
+    throw "Rondo Windows smoke timed out waiting for $Marker : $last"
 }
 
-$escapedPython = $Python.Replace("\", "\\").Replace('"', '\"')
-$escapedFake = $Fake.Replace("\", "\\").Replace('"', '\"')
-$escapedRepo = $Repo.Replace("\", "\\").Replace('"', '\"')
-$content = @"
-layout {
-    tab name="agents" focus=true {
-        pane name="codex" command="$escapedPython" cwd="$escapedRepo" {
-            args "$escapedFake"
-        }
-    }
-}
-"@
-[IO.File]::WriteAllText($Layout, $content, [Text.UTF8Encoding]::new($false))
-
-$process = $null
+$PreviousOverride = $env:RONDO_CODEX_COMMAND
+$Process = $null
+$Name = (& $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from rondo.core import session_name; print(session_name(Path(sys.argv[2])))" (Join-Path $Root "lib") $Workspace).Trim()
+$Failure = $null
 try {
-    $process = Start-Process -FilePath $Zellij -ArgumentList @("-s", $Name, "-n", $Layout) -PassThru -WindowStyle Hidden
-    $pane = Wait-Screen "FAKE_AGENT_READY"
-    $token = "WINDOWS_E2E_$([guid]::NewGuid().ToString('N').Substring(0, 8))"
-    Invoke-Zellij @("-s", $Name, "action", "paste", "--pane-id", [string]$pane.id, "--", $token) | Out-Null
-    Invoke-Zellij @("-s", $Name, "action", "send-keys", "--pane-id", [string]$pane.id, "Enter") | Out-Null
-    $null = Wait-Screen "RECEIVED:$token"
-    Write-Host "Windows Zellij delivery lifecycle: OK"
-} finally {
-    $previousPreference = $ErrorActionPreference
-    $ErrorActionPreference = "SilentlyContinue"
-    $deleted = $false
-    for ($attempt = 1; $attempt -le 5; $attempt++) {
-        & $Zellij delete-session --force $Name 2>$null | Out-Null
-        if ($process -and -not $process.HasExited) {
-            $process.WaitForExit(1000) | Out-Null
-            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
-        }
-        $sessions = (& $Zellij list-sessions -n 2>$null) -join "`n"
-        if ($sessions -notmatch "(?m)^$([regex]::Escape($Name))(?:\s|$)") {
-            $deleted = $true
-            break
-        }
-        Start-Sleep -Milliseconds 250
+    $env:RONDO_CODEX_COMMAND = $Fake
+    Push-Location $Workspace
+    try { & $Launcher setup --agents codex } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { throw "non-interactive setup failed" }
+    $Process = Start-Process -FilePath $env:COMSPEC -ArgumentList @("/d", "/c", "`"$Launcher`"") -WorkingDirectory $Workspace -PassThru -WindowStyle Hidden
+    Wait-Screen $Name "Codex" "FAKE_AGENT_READY"
+    $Message = "WINDOWS_VISIBLE_$Token"
+    Push-Location $Workspace
+    try { & $Launcher message codex $Message } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { throw "visible delivery command failed" }
+    Wait-Screen $Name "Codex" "RECEIVED:$Message"
+    Wait-Screen $Name "Relay" $Message
+    if (-not (Test-Path -LiteralPath (Join-Path $Workspace ".rondo\context.md") -PathType Leaf)) {
+        throw "project context was not created"
     }
-    if (Test-Path -LiteralPath $Temp) { Remove-Item -LiteralPath $Temp -Recurse -Force }
-    $ErrorActionPreference = $previousPreference
-    if (-not $deleted) { throw "Windows Zellij smoke leaked session: $Name" }
+    Write-Host "Windows Rondo tabs and visible delivery: OK"
+} catch {
+    $Failure = $_
+} finally {
+    if ($Name -and ((Session-Names) -contains $Name)) {
+        $cleanupPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "SilentlyContinue"
+            & $Zellij delete-session --force $Name 2>$null | Out-Null
+        } catch {} finally {
+            $ErrorActionPreference = $cleanupPreference
+        }
+    }
+    if ($Process -and -not $Process.HasExited) {
+        $Process.WaitForExit(3000) | Out-Null
+        if (-not $Process.HasExited) {
+            try { $Process.Kill() } catch {}
+        }
+    }
+    $env:RONDO_CODEX_COMMAND = $PreviousOverride
+    if (Test-Path -LiteralPath $Temp) {
+        for ($attempt = 1; $attempt -le 40; $attempt++) {
+            try {
+                Remove-Item -LiteralPath $Temp -Recurse -Force
+                break
+            } catch {
+                if ($attempt -eq 40 -and -not $Failure) { $Failure = $_ }
+                Start-Sleep -Milliseconds 250
+            }
+        }
+    }
 }
-
-# Cleanup commands may legitimately report that the already-exited session is
-# absent. Do not leak that native status after the lifecycle assertions passed.
+if ($Failure) { throw $Failure }
 $global:LASTEXITCODE = 0

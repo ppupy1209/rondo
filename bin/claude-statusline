@@ -1,3 +1,0 @@
-#!/bin/sh
-# Compatibility alias for existing Claude settings.
-exec "$(dirname "$0")/rondo-claude-status" "$@"

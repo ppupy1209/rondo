@@ -1,164 +1,121 @@
 #!/usr/bin/env python3
-"""Real Zellij delivery and restart smoke test; run explicitly in CI."""
+"""Open real Rondo tabs and verify visible delivery through Zellij on Unix."""
+
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import pty
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import uuid
 from pathlib import Path
 
-if os.name != "nt":
-    import fcntl
-    import pty
-    import struct
-    import termios
 
 ROOT = Path(__file__).resolve().parents[1]
 RONDO = ROOT / "bin" / "rondo"
-FAKE_AGENT = ROOT / "tests" / "fixtures" / "fake_agent.py"
+FAKE = ROOT / "tests" / "fixtures" / "fake_agent.py"
 
 
-def command(env: dict[str, str], name: str, *args: str, check: bool = True):
+def zellij(env, name, *args, check=True):
     return subprocess.run(
-        ["zellij", "-s", name, *args], env=env,
-        capture_output=True, text=True, timeout=15, check=check,
+        ["zellij", "-s", name, *args], env=env, capture_output=True,
+        text=True, timeout=15, check=check,
     )
 
 
-def wait_for(env: dict[str, str], name: str, marker: str = "FAKE_AGENT_READY") -> list[dict]:
-    deadline = time.monotonic() + 20
-    last_error = "session did not appear"
+def panes(env, name):
+    return json.loads(zellij(env, name, "action", "list-panes", "--json").stdout)
+
+
+def wait_screen(env, name, title, marker):
+    deadline = time.monotonic() + 30
+    last = "session did not appear"
     while time.monotonic() < deadline:
         try:
-            panes = json.loads(command(env, name, "action", "list-panes", "--json").stdout)
-            agent = next(item for item in panes if item.get("title") == "codex")
-            screen = command(
-                env, name, "action", "dump-screen", "--pane-id", str(agent["id"])
-            ).stdout
-            if marker in screen:
-                return panes
-            last_error = screen
-        except subprocess.CalledProcessError as error:
-            last_error = (error.stderr or error.stdout or str(error)).strip()
-        except (OSError, subprocess.SubprocessError, ValueError, StopIteration) as error:
-            last_error = str(error)
-        time.sleep(0.2)
-    raise RuntimeError(last_error)
+            items = panes(env, name)
+            pane = next(item for item in items if item.get("title") == title or item.get("tab_name") == title)
+            last = zellij(env, name, "action", "dump-screen", "--pane-id", str(pane["id"])).stdout
+            if marker in last:
+                return items
+        except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
+            last = str(error)
+        time.sleep(0.25)
+    raise RuntimeError("%s: %s" % (marker, last[-2000:]))
 
 
-def start(env: dict[str, str], name: str, repo: Path):
-    layout = "\n".join([
-        "layout {",
-        '  tab name="agents" {',
-        f'    pane name="codex" command={json.dumps(sys.executable)} cwd={json.dumps(str(repo))} {{',
-        f'      args {json.dumps(str(FAKE_AGENT))}',
-        "    }",
-        "  }",
-        '  tab name="shell" focus=true {',
-        f'    pane name="shell" cwd={json.dumps(str(repo))}',
-        "  }",
-        "}",
-    ])
-    layout_path = repo.parent / "layout.kdl"
-    layout_path.write_text(layout + "\n", encoding="utf-8")
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
-    process = subprocess.Popen(
-        ["zellij", "-s", name, "-n", str(layout_path)],
-        stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True,
-    )
-    os.close(slave)
-    return process, master
-
-
-def stop(env: dict[str, str], name: str, process, master: int) -> None:
-    subprocess.run(
-        ["zellij", "delete-session", "--force", name], env=env,
-        capture_output=True, text=True, timeout=15, check=False,
-    )
-    try:
-        process.wait(timeout=3)
-    except subprocess.TimeoutExpired:
-        process.terminate()
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=2)
-    os.close(master)
-
-
-def cycle(env: dict[str, str], name: str, repo: Path, token: str) -> None:
-    process, master = start(env, name, repo)
-    try:
-        try:
-            panes = wait_for(env, name)
-        except RuntimeError as error:
-            os.set_blocking(master, False)
-            chunks = []
-            while True:
-                try:
-                    chunk = os.read(master, 65536)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                except OSError:
-                    break
-            detail = b"".join(chunks).decode("utf-8", "replace")[-4000:]
-            raise RuntimeError(
-                f"{error}\nprocess={process.poll()}\nZellij PTY:\n{detail}"
-            ) from None
-        shell = next(item for item in panes if item.get("title") == "shell")
-        send_env = env | {
-            "ZELLIJ_SESSION_NAME": name,
-            "ZELLIJ_PANE_ID": str(shell["id"]),
-            "RONDO_LANG": "en",
-        }
-        sent = subprocess.run(
-            [sys.executable, str(RONDO), "send", "codex", token],
-            cwd=repo, env=send_env, capture_output=True, text=True, timeout=20,
-        )
-        if sent.returncode:
-            raise RuntimeError(sent.stderr or sent.stdout)
-        wait_for(env, name, "RECEIVED:" + token)
-    finally:
-        stop(env, name, process, master)
-
-
-def main() -> int:
+def main():
     if os.name == "nt":
-        print("Zellij PTY smoke is Unix-only")
         return 0
-    if shutil.which("zellij") is None:
+    if not shutil.which("zellij"):
         raise RuntimeError("zellij is required")
-    # Zellij encodes the socket path into an OS-local address with a strict
-    # length limit. Keep this test path short on macOS as Rondo itself does.
-    with tempfile.TemporaryDirectory(prefix="rz-", dir="/tmp") as directory:
-        base = Path(directory)
+    with tempfile.TemporaryDirectory(prefix="rz-", dir="/tmp") as temporary:
+        base = Path(temporary)
         repo = base / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        fake = base / "fake-codex"
+        fake.write_text("#!/bin/sh\nexec python3 %s \"$@\"\n" % json.dumps(str(FAKE)), encoding="utf-8")
+        fake.chmod(0o755)
         socket = base / "socket"
         config = base / "zellij-config"
         socket.mkdir()
         config.mkdir()
         env = os.environ.copy()
-        env.update({
-            "ZELLIJ_SOCKET_DIR": str(socket),
-            "ZELLIJ_CONFIG_DIR": str(config),
-            "XDG_CONFIG_HOME": str(base / "config"),
-            "XDG_CACHE_HOME": str(base / "cache"),
-            "PYTHONDONTWRITEBYTECODE": "1",
-        })
-        name = "rondo-e2e-" + uuid.uuid4().hex[:10]
-        cycle(env, name, repo, "E2E_FIRST_VISIBLE")
-        cycle(env, name, repo, "E2E_AFTER_FORCED_RESTART")
-    print("real Zellij delivery and forced restart: OK")
+        env.update(
+            {
+                "PATH": str(ROOT / "bin") + os.pathsep + env["PATH"],
+                "ZELLIJ_SOCKET_DIR": str(socket),
+                "ZELLIJ_CONFIG_DIR": str(config),
+                "RONDO_CODEX_COMMAND": str(fake),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+        )
+        configured = subprocess.run(
+            [sys.executable, str(RONDO), "setup", "--agents", "codex"],
+            cwd=repo, env=env, capture_output=True, text=True, timeout=15,
+        )
+        if configured.returncode:
+            raise RuntimeError(configured.stderr or configured.stdout)
+        sys.path.insert(0, str(ROOT / "lib"))
+        from rondo import core
+
+        name = core.session_name(repo)
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 35, 120, 0, 0))
+        process = subprocess.Popen(
+            [sys.executable, str(RONDO)], cwd=repo, env=env, stdin=slave,
+            stdout=slave, stderr=slave, start_new_session=True,
+        )
+        os.close(slave)
+        try:
+            wait_screen(env, name, "Codex", "FAKE_AGENT_READY")
+            token = "VISIBLE_" + uuid.uuid4().hex[:8]
+            sent = subprocess.run(
+                [sys.executable, str(RONDO), "message", "codex", token],
+                cwd=repo, env=env, capture_output=True, text=True, timeout=15,
+            )
+            if sent.returncode:
+                raise RuntimeError(sent.stderr or sent.stdout)
+            wait_screen(env, name, "Codex", "RECEIVED:" + token)
+            wait_screen(env, name, "Relay", token)
+            if not (repo / ".rondo" / "context.md").is_file():
+                raise RuntimeError("project context was not created")
+        finally:
+            subprocess.run(["zellij", "delete-session", "--force", name], env=env, capture_output=True, timeout=15)
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                process.wait(timeout=3)
+            os.close(master)
+    print("real Rondo tabs and visible delivery: OK")
     return 0
 
 

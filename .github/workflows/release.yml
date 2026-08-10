@@ -21,7 +21,10 @@ jobs:
         run: |
           version=$(python3 bin/rondo --version | awk '{print $2}')
           test "$GITHUB_REF_NAME" = "v$version"
+          python3 scripts/check_identity.py --all
+          python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-relay lib/rondo/core.py lib/rondo/cleanup.py
           python3 -m unittest discover -s tests -v
+          sh -n install.sh
       - name: Build immutable archives
         run: |
           version=$(python3 bin/rondo --version | awk '{print $2}')

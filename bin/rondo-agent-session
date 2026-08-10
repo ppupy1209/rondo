@@ -1,219 +1,106 @@
 #!/usr/bin/env python3
-"""Launch an agent, resuming its latest conversation for this working directory."""
+"""Run one native AI CLI and watch only for explicit quota exhaustion."""
 
 from __future__ import annotations
 
-import json
 import os
-import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
+from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from rondo import approval, audience, journal, knowledge
-from rondo.paths import repo_key, setting
-
-AGENTS = {"claude", "codex", "gemini", "kimi", "grok"}
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "rondo"
-CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rondo"
-journal.CACHE = CACHE_DIR
+from rondo import core
 
 
-def executable(command: tuple[str, ...] | list[str]) -> list[str]:
-    binary = shutil.which(command[0]) or command[0]
-    argv = [binary, *command[1:]]
-    if os.name == "nt" and Path(binary).suffix.lower() in (".cmd", ".bat"):
-        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *argv]
-    return argv
+def executable(command: List[str]) -> List[str]:
+    if os.name == "nt" and Path(command[0]).suffix.lower() in (".cmd", ".bat"):
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", *command]
+    return command
 
 
-def handoff_prompt(agent: str) -> str | None:
-    if os.environ.get("RONDO_RESUME_AGENT") != agent:
-        return None
-    path = Path(os.environ.get("RONDO_HANDOFF_FILE", ""))
-    if not path.is_file():
-        return None
-    if os.environ.get("RONDO_LANG") == "ko":
-        return f"[Rondo resume] 다음 인계 파일을 읽고 현재 작업을 이어서 완료하세요: {path}"
-    return f"[Rondo resume] Read this handoff file and continue the current work: {path}"
+def last_checkpoint(root: Path) -> str:
+    state = core.load_state(root)
+    checkpoints = state.get("checkpoints", [])
+    if checkpoints:
+        return checkpoints[-1].get("summary", "사용량 제한으로 중단된 작업을 이어서 진행하세요")
+    return "사용량 제한으로 중단된 작업을 .rondo/context.md에서 확인하고 이어서 진행하세요"
 
 
-def action_guidance(language: str) -> str:
-    if language == "ko":
-        return (
-            "[Rondo 자연어 작업] 사용자가 Rondo 명령을 외우게 하지 마세요. 복잡한 작업 성공, 사용자 교정, "
-            "오류 복구, 저장소 고유 규칙 발견 뒤에는 재사용 가치가 있는 최소 사실을 `rondo learn memory ...`, "
-            "반복 절차를 `rondo learn skill ...`로 먼저 제안하세요. 제안은 절대 스스로 승인하지 마세요. "
-            "의미 있는 작업이 끝나면 비밀값·원문 대화 없이 결과와 이유만 `rondo note ... --ref ...`로 짧게 "
-            "기록하세요. 과거 맥락은 `rondo recall ...`로 찾으세요. 사용자가 반복·예약 작업을 자연어로 "
-            "요청하면 정확한 agent와 `--every`, `--at` 또는 `--cron`을 골라 `rondo schedule add ...`로 "
-            "제안하고 승인 대기임을 알리세요. 서로 다른 해법의 병렬 탐색에는 `rondo race`, 독립 검증에는 "
-            "`rondo test`, 증거에는 `rondo proof`, 독립 리뷰에는 `rondo code-review all`을 사용하세요. "
-            "테스트 진행 확인과 결과 수집은 `rondo test status`, `rondo test finish`를 사용하세요. 실행한 "
-            "동작은 짧게 알리되 승인·거절·삭제·일시정지, PR·push·merge, undo는 사용자의 명시적 요청 없이 "
-            "실행하지 마세요."
-        )
-    return (
-        "[Rondo natural actions] Do not make the user memorize Rondo syntax. After a complex success, user "
-        "correction, error recovery, or repository-specific discovery, proactively propose the smallest reusable "
-        "fact with `rondo learn memory ...` or procedure with `rondo learn skill ...`; never approve your own "
-        "proposal. After meaningful work, record only the high-signal outcome and rationale, never secrets or raw "
-        "conversation, with `rondo note ... --ref ...`; use `rondo recall ...` for prior context. When the user "
-        "naturally asks for recurring or scheduled work, choose the exact agent and one of `--every`, `--at`, or "
-        "`--cron`, call `rondo schedule add ...`, and report that it awaits approval. Use `rondo race` to explore "
-        "competing implementations in parallel, `rondo test` for independent testing, `rondo proof` for evidence, "
-        "and `rondo code-review all` for independent review; use `rondo test status` and `rondo test finish` to "
-        "collect results. Briefly report actions, but never approve, reject, remove, pause, create or merge a PR, "
-        "push, or undo without an explicit user request."
-    )
-
-
-def session_event(root: Path, kind: str, agent: str, session: str, summary: str) -> None:
-    forced = os.environ.get("RONDO_HISTORY", "").strip().casefold()
-    configured = setting("history", "on").casefold()
-    if forced in {"0", "off", "false", "no"} or (not forced and configured == "off"):
+def quota_handoff(root: Path, agent: str, session: str) -> None:
+    config = core.load_config(root)
+    if config["failover"] == "off":
+        core.append_message(root, core.display_name(agent), "User", "사용량 제한으로 작업이 중단되었습니다.", "quota", session)
+        return
+    if config["failover"] == "ask":
+        core.append_message(root, core.display_name(agent), "User", "사용량 제한입니다. `rondo next`로 이어갈 AI를 선택하세요.", "quota", session)
         return
     try:
-        journal.record(root, kind, summary, agent=agent, session=session)
-    except (journal.JournalError, OSError):
-        pass
+        core.handoff(root, agent, session, last_checkpoint(root), reason="quota")
+    except core.RondoError as error:
+        core.append_message(root, "Rondo", "User", "자동 인계 대기: %s" % error, "quota", session)
 
 
-def kimi_agent_file(mode: str, rule: str, root: Path) -> Path:
-    directory = CACHE_DIR / "audience"
-    if directory.is_symlink():
-        raise OSError("unsafe Rondo audience cache")
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(directory, 0o700)
-    key = repo_key(root)
-    target = directory / f"kimi-{mode}-{key}.md"
-    content = (
-        "---\n"
-        f"name: rondo-{mode}\n"
-        "description: Kimi coding agent with Rondo explanation guidance\n"
-        "---\n\n"
-        "${base_prompt}\n\n"
-        f"{rule}\n"
+def run(agent: str, extra: List[str], reviewer: bool = False) -> int:
+    agent = core.normalize_agent(agent)
+    root = core.find_project_root(Path(os.environ.get("RONDO_PROJECT_ROOT", Path.cwd())))
+    core.init_project(root)
+    session = uuid.uuid4().hex
+    pane_id = os.environ.get("ZELLIJ_PANE_ID", "")
+    role = "reviewer" if reviewer else "worker"
+    os.environ.update(
+        {
+            "RONDO_AGENT": agent,
+            "RONDO_SESSION_ID": session,
+            "RONDO_PROJECT_ROOT": str(root),
+            "RONDO_ZELLIJ_SESSION": os.environ.get("ZELLIJ_SESSION_NAME", os.environ.get("RONDO_ZELLIJ_SESSION", "")),
+        }
     )
-    for old in directory.glob(f"kimi-*-{key}.md"):
-        if old != target:
-            old.unlink(missing_ok=True)
-    if target.is_symlink():
-        target.unlink()
-    temp = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(temp, flags, 0o600)
+    core.register_session(root, agent, session, pane_id, role)
+    command = executable([*core.provider_command(agent, root, role), *extra])
+    process = None
+    handed_off = False
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temp.replace(target)
+        process = subprocess.Popen(command, cwd=str(root), env=os.environ.copy())
+        process.wait()
+        # Some CLIs exit immediately after rendering a quota message. The
+        # wrapper pane still contains that final screen, so sample it twice
+        # before closing instead of treating an ambiguous exit code as quota.
+        consecutive = 0
+        for _sample in range(2):
+            if handed_off:
+                break
+            screen = core.dump_pane(os.environ.get("RONDO_ZELLIJ_SESSION", ""), pane_id)
+            consecutive = consecutive + 1 if core.quota_exhausted(screen) else 0
+            if consecutive >= 2:
+                quota_handoff(root, agent, session)
+                handed_off = True
+                break
+            time.sleep(0.25)
+        return int(process.returncode or 0)
     finally:
-        temp.unlink(missing_ok=True)
-    return target
-
-
-def session_commands(
-    agent: str, mode: str, approval_mode: str | None = None, root: Path | None = None
-) -> tuple[list[str] | None, list[str], list[str] | None]:
-    root = root or Path.cwd()
-    language = os.environ.get("RONDO_LANG", "").lower()
-    if language not in {"ko", "en"}:
-        try:
-            language = (CONFIG_DIR / "language").read_text(encoding="utf-8").strip()
-        except OSError:
-            language = "en"
-    rule = " ".join(filter(None, (
-        audience.instruction(mode),
-        action_guidance(language),
-        knowledge.guidance(root, language),
-    )))
-    git_policy = os.environ.get("RONDO_GIT_POLICY", "direct")
-    if git_policy in ("pr", "review"):
-        review = " Require independent agent review before merge." if git_policy == "review" else ""
-        rule = " ".join(filter(None, (
-            rule,
-            "[Rondo Git policy] Work on a feature branch and use a pull request. "
-            "Do not push directly to the default branch or merge without the user's explicit request."
-            + review,
-        )))
-    permissions = approval.arguments(
-        agent, approval_mode or approval.selected(CONFIG_DIR)
-    )
-    if agent == "claude":
-        guidance = ["--append-system-prompt", rule] if rule else []
-        return ["claude", *permissions, "--continue", *guidance], ["claude", *permissions, *guidance], None
-    if agent == "codex":
-        guidance = (
-            ["-c", f"developer_instructions={json.dumps(rule, ensure_ascii=False)}"]
-            if rule else []
-        )
-        return ["codex", *permissions, *guidance, "resume", "--last"], ["codex", *permissions, *guidance], None
-    if agent == "gemini":
-        guidance = ["--prompt-interactive", rule] if rule else []
-        return None, ["agy", *permissions, *guidance], None
-    if agent == "grok":
-        guidance = ["--rules", rule] if rule else []
-        return None, ["grok", *permissions, *guidance], None
-    if rule:
-        return None, [
-            "kimi", *permissions, "--agent-file", str(kimi_agent_file(mode, rule, root))
-        ], ["kimi", *permissions]
-    return None, ["kimi", *permissions], None
-
-
-def run(agent: str, extra: list[str]) -> int:
-    os.environ["RONDO_AGENT"] = agent
-    os.environ.setdefault("RONDO_AGENT_SESSION", uuid.uuid4().hex)
-    session = os.environ["RONDO_AGENT_SESSION"]
-    root = Path.cwd()
-    session_event(root, "session-start", agent, session, f"{agent} session started")
-    mode = audience.selected(CONFIG_DIR)
-    resume, fresh, compatibility = session_commands(agent, mode)
-    prompt = handoff_prompt(agent)
-    tail = [*extra, *([prompt] if prompt else [])]
-    result = None
-    try:
-        result = subprocess.run([*executable(resume or fresh), *tail])
-        if resume and result.returncode == 1:
-            result = subprocess.run([*executable(fresh), *tail])
-        if compatibility and result.returncode == 1:
-            result = subprocess.run([*executable(compatibility), *tail])
-
-        hook = shutil.which("handoff")
-        if hook and os.name != "nt":
-            label = {
-                "claude": "Claude", "codex": "Codex", "gemini": "Gemini",
-                "kimi": "Kimi", "grok": "Grok",
-            }[agent]
-            subprocess.run([hook, label], check=False)
-        return result.returncode
-    finally:
-        code = result.returncode if result is not None else -1
-        session_event(
-            root, "session-end", agent, session,
-            f"{agent} session ended with exit code {code}",
-        )
+        core.close_session(root, session, "quota_exhausted" if handed_off else "closed")
 
 
 def main() -> int:
-    if len(sys.argv) < 2 or sys.argv[1] not in AGENTS:
-        print("usage: rondo-agent-session claude|codex|gemini|kimi|grok [args...]", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print("usage: rondo-agent-session claude|codex|gemini [--reviewer] [provider arguments]", file=sys.stderr)
         return 2
-    return run(sys.argv[1], sys.argv[2:])
+    agent = sys.argv[1]
+    rest = sys.argv[2:]
+    reviewer = "--reviewer" in rest
+    rest = [item for item in rest if item != "--reviewer"]
+    return run(agent, rest, reviewer)
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except knowledge.KnowledgeError as error:
-        if os.environ.get("RONDO_LANG") == "ko":
-            message = "프로젝트 지식 상태가 안전하지 않아 에이전트를 시작하지 않았습니다"
-        else:
-            message = "project knowledge is unsafe; the agent was not started"
-        print(f"rondo: {message} ({error.code})", file=sys.stderr)
+    except core.RondoError as error:
+        print("rondo: %s" % error, file=sys.stderr)
         raise SystemExit(1)
+    except KeyboardInterrupt:
+        raise SystemExit(130)

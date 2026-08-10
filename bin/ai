@@ -1,3 +1,0 @@
-#!/bin/sh
-# Compatibility alias. New installations should use `rondo`.
-exec "$(dirname "$0")/rondo" "$@"

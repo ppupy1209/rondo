@@ -23,14 +23,14 @@ jobs:
         run: python3 scripts/check_identity.py --all
       - name: Python checks
         run: |
-          python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
+          python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-relay lib/rondo/core.py lib/rondo/cleanup.py
           python3 -m unittest discover -s tests -v
       - name: Shell checks
         run: |
-          sh -n install.sh bin/ai bin/rondo-status bin/claude-statusline bin/*-session bin/handoff
+          sh -n install.sh
           RONDO_HOME="$RUNNER_TEMP/rondo-home" sh install.sh
           RONDO_HOME="$RUNNER_TEMP/rondo-home" sh install.sh
-      - name: Real Zellij delivery and restart
+      - name: Real Rondo tabs and visible delivery
         run: |
           export PATH="$RUNNER_TEMP/rondo-home/.local/bin:$PATH"
           python3 tests/zellij_smoke.py
@@ -51,17 +51,17 @@ jobs:
         run: python scripts/check_identity.py --all
       - name: Python checks
         run: |
-          python -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
+          python -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-relay lib/rondo/core.py lib/rondo/cleanup.py
           python -m unittest discover -s tests -v
       - name: PowerShell installer
         shell: pwsh
         run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./install.ps1), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { throw ($errors | Out-String) }
           ./install.ps1
           $env:Path = "$env:LOCALAPPDATA\Rondo\bin;$env:Path"
           rondo --version
-      - name: Windows Zellij lifecycle
+      - name: Windows Rondo tabs and visible delivery
         shell: pwsh
         run: ./tests/zellij_windows_smoke.ps1
-      - name: Windows Rondo anywhere entry
-        shell: pwsh
-        run: ./tests/rondo_windows_entry_smoke.ps1

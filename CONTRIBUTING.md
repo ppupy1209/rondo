@@ -1,26 +1,27 @@
-# Rondo에 기여하기
+# Rondo 기여 안내
 
-Rondo는 의존성을 늘리기보다 Python 표준 라이브러리와 각 CLI의 공개 인터페이스를 우선합니다. 변경은 macOS, Linux, Windows 동작과 로컬 우선·보이는 위임·사용자 승인 경계를 유지해야 합니다.
+Rondo 0.15의 범위는 의도적으로 작습니다. 변경은 Codex·Claude·Gemini의 네이티브 CLI, 프로젝트별 맥락 인계, 명확한 쿼터 소진 시 전환, 독립 검증, 공개 Relay 메시지 중 하나를 직접 개선해야 합니다. 별도 대시보드, 모델 API 라우터, 작업 저널, 예약 실행, 범용 자동화는 다시 추가하지 않습니다.
 
-## 개발 흐름
+## 커밋 신원
 
-1. issue에서 문제와 사용자 결과를 먼저 합의합니다.
-2. 한 변경은 한 목적에 집중하고 테스트를 함께 추가합니다.
-3. 아래 검증을 실행합니다.
+이 저장소의 모든 author, committer, annotated tag tagger는 다음 값만 허용합니다.
 
 ```sh
-PYTHONUTF8=1 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-sh -n install.sh bin/ai bin/rondo-status bin/claude-statusline bin/*-session bin/handoff
-PYTHONUTF8=1 python3 tests/zellij_smoke.py  # zellij가 설치된 macOS/Linux
+git config user.name "Yeonwoo Kim"
+git config user.email "ppupy1209@naver.com"
+git config core.hooksPath .githooks
 ```
 
-Windows PowerShell에서는 `$env:PYTHONUTF8=1`을 먼저 설정하고 `python -m unittest discover -s tests -v`와 `./tests/zellij_windows_smoke.ps1`을 실행합니다. Windows 설치 변경은 GitHub Actions의 Windows job까지 확인합니다. 새 다운로드는 고정 버전, 해시 검증, 안전한 임시 경로, 실패 시 복구를 갖춰야 합니다.
+커밋 전 `python3 scripts/check_identity.py --current`, CI에서는 전체 이력을 `--all`로 검사합니다. 다른 회사·개인 계정 주소가 포함된 커밋은 받지 않습니다.
 
-이 저장소의 커밋 author·committer와 annotated tag tagger는 모두 `Yeonwoo Kim <ppupy1209@naver.com>`이어야 합니다. 처음 clone한 뒤 `git config user.name "Yeonwoo Kim"`, `git config user.email "ppupy1209@naver.com"`, `git config core.hooksPath .githooks`를 설정하세요. CI와 저장소 훅이 다른 신원을 거부합니다.
+## 확인 절차
 
-## Pull Request
+```sh
+python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-relay lib/rondo/core.py lib/rondo/cleanup.py
+python3 -m unittest discover -s tests -v
+sh -n install.sh
+```
 
-- 사용자에게 보이는 동작과 실패 시 복구 방법을 설명합니다.
-- 보안 경계나 저장 형식이 바뀌면 `SECURITY.md` 또는 관련 문서를 갱신합니다.
-- 대화 원문, 실제 사용자 경로, 토큰, 공급자 세션 데이터를 fixture로 커밋하지 않습니다.
-- 기능 변경은 `CHANGELOG.md`의 다음 릴리스 항목에 남깁니다.
+Windows 설치 변경은 `install.ps1` 로컬 설치와 새 PowerShell에서의 `rondo --version`까지 확인합니다. 구현 세션은 개발 중 테스트를 실행할 수 있지만 최종 검증과 리뷰는 구현에 참여하지 않은 다른 AI 또는 새 세션이 맡아야 합니다.
+
+테스트 fixture와 오류 출력에는 토큰, 로컬 사용자 경로, 회사 정보, 실제 프롬프트를 넣지 않습니다. 사용자에게 보이는 동작, 실패 시 복구, Windows/macOS/Linux 차이가 있으면 PR 설명과 `CHANGELOG.md`에 함께 기록합니다.

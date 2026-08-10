@@ -9,19 +9,19 @@ verify_sha256() {
     python3 - "$1" "$2" "$3" <<'PY'
 import hashlib, re, sys
 checksums, artifact, expected_name = sys.argv[1:]
-lines = []
+matches = []
 with open(checksums, encoding="utf-8") as source:
     for line in source:
         match = re.fullmatch(r"([0-9a-fA-F]{64})\s+\*?(.+?)\s*", line)
         if match and match.group(2) == expected_name:
-            lines.append(match.group(1).lower())
-if len(lines) != 1:
+            matches.append(match.group(1).lower())
+if len(matches) != 1:
     raise SystemExit("checksum entry is missing or ambiguous: " + expected_name)
 digest = hashlib.sha256()
 with open(artifact, "rb") as source:
     for chunk in iter(lambda: source.read(1024 * 1024), b""):
         digest.update(chunk)
-if digest.hexdigest() != lines[0]:
+if digest.hexdigest() != matches[0]:
     raise SystemExit("checksum mismatch: " + expected_name)
 PY
 }
@@ -39,13 +39,16 @@ if digest.hexdigest() != expected:
 PY
 }
 
-managed_release() {
-    command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
+check_python() {
     python3 -c 'import sys; assert sys.version_info >= (3, 10)' 2>/dev/null || {
         echo "Python 3.10+ is required. Install Python and run this command again." >&2
         exit 1
     }
+}
 
+managed_release() {
+    command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
+    check_python
     version="${RONDO_VERSION:-}"
     if [ -n "$version" ]; then
         version=$(python3 - "$version" <<'PY'
@@ -91,21 +94,17 @@ with tarfile.open(archive, "r:gz") as package:
         package.extractall(destination, members=members)
 PY
     set -- "$extracted"/*
-    if [ "$#" -ne 1 ] || [ ! -d "$1" ] || [ -L "$1" ]; then
+    if [ "$#" -ne 1 ] || [ ! -d "$1" ] || [ -L "$1" ] || [ ! -f "$1/bin/rondo" ]; then
         echo "Downloaded Rondo archive is invalid." >&2
         exit 1
     fi
     source=$1
-    if [ ! -f "$source/bin/rondo" ] || [ -L "$source/bin/rondo" ]; then
-        echo "Downloaded Rondo archive is invalid." >&2
+    detected=$(python3 "$source/bin/rondo" --version | awk '{print $2}')
+    if [ -n "$version" ] && [ "$detected" != "$version" ]; then
+        echo "Requested Rondo $version but archive contains $detected." >&2
         exit 1
     fi
-    installed=$(python3 "$source/bin/rondo" --version | awk '{print $2}')
-    if [ -n "$version" ] && [ "$installed" != "$version" ]; then
-        echo "Requested Rondo $version but archive contains $installed." >&2
-        exit 1
-    fi
-    version=$installed
+    version=$detected
 
     app="${RONDO_INSTALL_DIR:-$RONDO_USER_HOME/.local/share/rondo}"
     previous="$app.previous"
@@ -120,20 +119,16 @@ for path in (app, previous):
         raise SystemExit("refusing a symlinked Rondo installation")
     if not path.exists():
         continue
-    marker = path / ".rondo-release.json"
     try:
-        value = json.loads(marker.read_text(encoding="utf-8"))
+        marker = json.loads((path / ".rondo-release.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise SystemExit("refusing to replace an unmanaged Rondo directory")
-    if value.get("schema") != 1 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(value.get("version", ""))):
+    if marker.get("schema") != 1 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(marker.get("version", ""))):
         raise SystemExit("refusing an invalid Rondo installation")
 PY
     mkdir -p "$(dirname "$app")"
     had_current=0
-    if [ -d "$app" ]; then
-        mv "$app" "$staging"
-        had_current=1
-    fi
+    if [ -d "$app" ]; then mv "$app" "$staging"; had_current=1; fi
     if ! mv "$source" "$app"; then
         [ "$had_current" -eq 0 ] || mv "$staging" "$app"
         exit 1
@@ -146,45 +141,31 @@ temporary.write_text(json.dumps({"schema": 1, "version": version, "source": "git
 os.chmod(temporary, 0o600)
 os.replace(temporary, target)
 PY
-    if ! RONDO_FORCE_REMOTE=0 RONDO_RELEASE_STAGED=1 sh "$app/install.sh"; then
+    if ! RONDO_RELEASE_STAGED=1 sh "$app/install.sh"; then
         python3 - "$app" <<'PY'
 import pathlib, shutil, sys
 target = pathlib.Path(sys.argv[1])
-if target.is_dir() and not target.is_symlink():
-    shutil.rmtree(target)
+if target.is_dir() and not target.is_symlink(): shutil.rmtree(target)
 PY
         [ "$had_current" -eq 0 ] || mv "$staging" "$app"
         exit 1
     fi
     if [ "$had_current" -eq 1 ]; then
-        if ! python3 - "$previous" <<'PY'
-import pathlib, shutil, sys
-target = pathlib.Path(sys.argv[1])
-if target.exists():
+        python3 - "$previous" "$staging" <<'PY'
+import json, pathlib, re, shutil, sys
+for target in map(pathlib.Path, sys.argv[1:]):
+    if not target.exists():
+        continue
     if target.is_symlink() or len(target.parts) < 3:
         raise SystemExit("unsafe previous Rondo installation")
+    try:
+        marker = json.loads((target / ".rondo-release.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise SystemExit("refusing to remove an unmanaged previous Rondo installation")
+    if marker.get("schema") != 1 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(marker.get("version", ""))):
+        raise SystemExit("refusing to remove an invalid previous Rondo installation")
     shutil.rmtree(target)
 PY
-        then
-            python3 - "$app" <<'PY'
-import pathlib, shutil, sys
-target = pathlib.Path(sys.argv[1])
-if target.is_dir() and not target.is_symlink():
-    shutil.rmtree(target)
-PY
-            mv "$staging" "$app"
-            exit 1
-        fi
-        if ! mv "$staging" "$previous"; then
-            python3 - "$app" <<'PY'
-import pathlib, shutil, sys
-target = pathlib.Path(sys.argv[1])
-if target.is_dir() and not target.is_symlink():
-    shutil.rmtree(target)
-PY
-            mv "$staging" "$app"
-            exit 1
-        fi
     fi
     trap - EXIT HUP INT TERM
     rm -rf "$temporary"
@@ -192,56 +173,44 @@ PY
 }
 
 if [ "${RONDO_RELEASE_STAGED:-0}" != "1" ]; then
-    if [ "${RONDO_FORCE_REMOTE:-0}" = "1" ]; then
-        managed_release
-    fi
     case "$0" in
         *install.sh) ;;
         *) managed_release ;;
     esac
+    if [ "${RONDO_FORCE_REMOTE:-0}" = "1" ]; then managed_release; fi
 fi
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BIN="$RONDO_USER_HOME/.local/bin"
 LAYOUTS="$RONDO_USER_HOME/.config/zellij/layouts"
-SETTINGS="$RONDO_USER_HOME/.claude/settings.json"
-
 mkdir -p "$BIN" "$LAYOUTS"
-
-python3 -c 'import sys; assert sys.version_info >= (3, 10)' 2>/dev/null || {
-    echo "Python 3.10+ is required. Install Python and run this command again." >&2
-    exit 1
-}
+check_python
 
 if ! command -v zellij >/dev/null 2>&1 && [ ! -x "$BIN/zellij" ]; then
     command -v curl >/dev/null 2>&1 || { echo "curl is required to install Zellij" >&2; exit 1; }
     case "$(uname -s)-$(uname -m)" in
-        Darwin-arm64) target=aarch64-apple-darwin; zellij_sha256=b6acf83a7739cf5f0f4e9bd47709642d4d98acbbf8c34d4a12c6e706f531da61 ;;
-        Darwin-x86_64) target=x86_64-apple-darwin; zellij_sha256=59f803faa32cd4e5f316f0dc2d3b7a5530a72553e38ad939286471848a418eeb ;;
-        Linux-aarch64|Linux-arm64) target=aarch64-unknown-linux-musl; zellij_sha256=15e6534d42644d66973d136c590c49739dcfd6a1a2a0d3d917973f16c81b45fb ;;
-        Linux-x86_64) target=x86_64-unknown-linux-musl; zellij_sha256=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751 ;;
+        Darwin-arm64) target=aarch64-apple-darwin; digest=b6acf83a7739cf5f0f4e9bd47709642d4d98acbbf8c34d4a12c6e706f531da61 ;;
+        Darwin-x86_64) target=x86_64-apple-darwin; digest=59f803faa32cd4e5f316f0dc2d3b7a5530a72553e38ad939286471848a418eeb ;;
+        Linux-aarch64|Linux-arm64) target=aarch64-unknown-linux-musl; digest=15e6534d42644d66973d136c590c49739dcfd6a1a2a0d3d917973f16c81b45fb ;;
+        Linux-x86_64) target=x86_64-unknown-linux-musl; digest=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751 ;;
         *) echo "Unsupported platform for automatic Zellij installation: $(uname -s) $(uname -m)" >&2; exit 1 ;;
     esac
-    echo "install Zellij $ZELLIJ_VERSION (verified)"
+    echo "Installing Zellij $ZELLIJ_VERSION (verified)..."
     temporary=$(mktemp -d)
     trap 'rm -rf "$temporary"' EXIT HUP INT TERM
     asset="zellij-$target.tar.gz"
-    base="https://github.com/zellij-org/zellij/releases/download/v$ZELLIJ_VERSION"
-    curl -fsSL "$base/$asset" -o "$temporary/$asset"
-    verify_digest "$temporary/$asset" "$zellij_sha256" "$asset"
+    curl -fsSL "https://github.com/zellij-org/zellij/releases/download/v$ZELLIJ_VERSION/$asset" -o "$temporary/$asset"
+    verify_digest "$temporary/$asset" "$digest" "$asset"
     python3 - "$temporary/$asset" "$BIN/zellij" <<'PY'
 import os, pathlib, tarfile, sys
 archive, target = sys.argv[1:]
 with tarfile.open(archive, "r:gz") as package:
     members = [item for item in package.getmembers() if pathlib.PurePosixPath(item.name).name == "zellij"]
-    if len(members) != 1 or not members[0].isfile():
-        raise SystemExit("invalid Zellij archive")
+    if len(members) != 1 or not members[0].isfile(): raise SystemExit("invalid Zellij archive")
     source = package.extractfile(members[0])
-    if source is None:
-        raise SystemExit("invalid Zellij archive")
+    if source is None: raise SystemExit("invalid Zellij archive")
     temporary = target + ".tmp"
-    with open(temporary, "wb") as output:
-        output.write(source.read())
+    with open(temporary, "wb") as output: output.write(source.read())
     os.chmod(temporary, 0o755)
     os.replace(temporary, target)
 PY
@@ -258,13 +227,11 @@ safe_link() {
             exit 1
         fi
         if ! python3 - "$source" "$target" <<'PY'
-import os, pathlib, sys
+import pathlib, sys
 source, target = map(pathlib.Path, sys.argv[1:])
 try:
-    if source.resolve(strict=True) != target.resolve(strict=True):
-        raise SystemExit(1)
-except OSError:
-    raise SystemExit(1)
+    if source.resolve(strict=True) != target.resolve(strict=True): raise SystemExit(1)
+except OSError: raise SystemExit(1)
 PY
         then
             echo "Refusing to replace a launcher owned by another program: $target" >&2
@@ -274,74 +241,24 @@ PY
     ln -sfn "$source" "$target"
 }
 
-for f in "$repo"/bin/*; do
-    [ -f "$f" ] && [ ! -L "$f" ] || continue
-    safe_link "$f" "$BIN/$(basename "$f")"
-    echo "link  $BIN/$(basename "$f")"
+for name in rondo rondo-agent-session rondo-relay; do
+    safe_link "$repo/bin/$name" "$BIN/$name"
+    echo "link  $BIN/$name"
 done
 
-# Layouts are generated from the selected panes at runtime.
+for name in ai ai-status rondo-status rondo-claude-status claude-statusline rondo-lens \
+    claude-session codex-session agy-session kimi-session grok-session handoff; do
+    target="$BIN/$name"
+    if [ -L "$target" ]; then
+        owner=$(readlink "$target" || true)
+        case "$owner" in "$repo"/bin/*|*/.local/share/rondo/bin/*) rm -f "$target" ;; esac
+    fi
+done
 rm -f "$LAYOUTS/ai.kdl"
 
-# SessionEnd 훅 등록 — Claude Code 와 Gemini CLI 는 같은 스키마를 쓴다.
-# 기존 설정은 보존하고 hooks 키만 병합한다.
-# Codex 는 세션 종료 이벤트가 없어 zellij 레이아웃에서 종료 직후 실행한다.
-python3 - "$SETTINGS" "$RONDO_USER_HOME/.gemini/settings.json" <<'PY'
-import json, os, shutil, sys
-
-for path, agent in zip(sys.argv[1:], ("Claude", "Gemini")):
-    entry = {"type": "command", "command": "handoff " + agent}
-    cfg = {}
-    existed = os.path.exists(path)
-    if existed:
-        try:
-            with open(path) as fh:
-                cfg = json.load(fh)
-        except (OSError, ValueError) as error:
-            print("skip  %-6s 설정 파일을 읽을 수 없음: %s" % (agent, error))
-            continue
-
-    changed = False
-    hooks = cfg.setdefault("hooks", {}).setdefault("SessionEnd", [])
-    if any(entry in group.get("hooks", []) for group in hooks):
-        print("hook  %-6s 이미 등록됨" % agent)
-    else:
-        hooks.append({"hooks": [entry]})
-        changed = True
-        print("hook  %-6s SessionEnd 등록" % agent)
-
-    snap = {"type": "command", "command": "rondo snap --auto"}
-    prompts = cfg.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
-    if any(snap in group.get("hooks", []) for group in prompts):
-        print("snap  %-6s 이미 등록됨" % agent)
-    else:
-        prompts.append({"hooks": [snap]})
-        changed = True
-        print("snap  %-6s UserPromptSubmit 등록" % agent)
-
-    if agent == "Claude":
-        if cfg.get("statusLine"):
-            print("status Claude 기존 statusLine 유지")
-        else:
-            cfg["statusLine"] = {
-                "type": "command",
-                "command": "rondo-claude-status",
-                "refreshInterval": 5,
-            }
-            changed = True
-            print("status Claude Rondo statusLine 등록")
-
-    if changed:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if existed and not os.path.exists(path + ".bak"):
-            shutil.copy(path, path + ".bak")
-        temporary = path + ".rondo.tmp"
-        with open(temporary, "w") as fh:
-            json.dump(cfg, fh, indent=2, ensure_ascii=False)
-            fh.write("\n")
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-PY
+cleanup_home="$HOME"
+if [ "$RONDO_USER_HOME" != "$HOME" ]; then cleanup_home="$RONDO_USER_HOME"; fi
+HOME="$cleanup_home" PYTHONPATH="$repo/lib" python3 -m rondo.cleanup
 
 case ":$PATH:" in
     *":$BIN:"*) ;;
@@ -354,15 +271,12 @@ case ":$PATH:" in
         touch "$profile"
         if ! grep -F "$BIN" "$profile" >/dev/null 2>&1; then
             printf '\n# Rondo\nexport PATH="%s:$PATH"\n' "$BIN" >> "$profile"
-            echo "path  $profile 갱신"
+            echo "path  updated $profile"
         fi
         ;;
 esac
 
 echo
-echo "완료. 사용법:"
-echo "  rondo           첫 설정 후 프로젝트 세션 열기"
-echo "  rondo setup     저장된 설정 변경"
-echo "  rondo doctor    설치 상태 확인"
-echo "  rondo update    새 릴리스 확인·설치"
-echo "  handoff --init  이 레포에서 핸드오프 기록 켜기"
+echo "Rondo installed."
+echo "  rondo        choose installed AI CLIs on first run and open the project"
+echo "  rondo setup  enable or disable Claude, Codex and Gemini later"
