@@ -2,6 +2,15 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.14.4] - 2026-08-10
+
+### 수정
+
+- Windows에서 Zellij 서버가 비정상 종료된 뒤 PID 표식만 남은 세션을 안전하게 감지하고 자동 정리
+- 고아 세션이 활성 세션처럼 표시되어 `list-panes`가 10초 후 실패하던 문제를 새 세션 자동 생성으로 복구
+- 실행 중인 Zellij PID 표식과 링크·비정상 표식은 보존하여 정상 세션이나 임의 파일을 삭제하지 않도록 방어
+- 실제 Zellij 서버를 강제 종료한 뒤 같은 작업공간이 자동 복구되는 Windows 회귀 검사 추가
+
 ## [0.14.3] - 2026-08-10
 
 ### 수정
@@ -119,6 +128,7 @@
 - 제거 전 전체 대상 사전 검증과 Rondo가 소유한 launcher·hook만 제거
 - 진단 묶음은 허용 목록 기반 메타데이터만 기록하고 기존 파일을 덮어쓰지 않음
 
+[0.14.4]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.4
 [0.14.3]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.3
 [0.14.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.2
 [0.14.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.1

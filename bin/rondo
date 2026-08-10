@@ -12,6 +12,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import time
 import sys
 import unicodedata
@@ -30,7 +31,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.14.3"
+VERSION = "0.14.4"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -303,6 +304,7 @@ TEXT = {
         "pane_missing": "{name} 패널을 찾지 못했습니다. `rondo add {name}`으로 먼저 여세요.",
         "pane_exists": "{name} 패널은 이미 열려 있습니다.",
         "pane_lookup_failed": "zellij 패널 정보를 읽지 못했습니다.",
+        "session_unresponsive": "Zellij 세션이 응답하지 않습니다: {name}",
         "sent": "{name} 패널에 메시지를 보냈습니다.",
         "pane_not_ready": "{name} 패널이 신뢰·승인·선택 화면에서 대기 중이라 전송하지 않았습니다. 패널에서 직접 결정한 뒤 다시 실행하세요.",
         "delivery_unverified": "{name} 패널의 입력란에서 메시지를 확인하지 못해 제출하지 않았습니다.",
@@ -706,6 +708,7 @@ Inside a session
         "pane_missing": "No {name} pane was found. Open it with `rondo add {name}` first.",
         "pane_exists": "The {name} pane is already open.",
         "pane_lookup_failed": "Could not read zellij pane information.",
+        "session_unresponsive": "The Zellij session is not responding: {name}",
         "sent": "Message sent to the {name} pane.",
         "pane_not_ready": "The {name} pane is waiting at a trust, approval, or selection prompt. Decide in that pane, then retry.",
         "delivery_unverified": "The message was not visible in the {name} input, so it was not submitted.",
@@ -1249,6 +1252,89 @@ def zellij_sessions() -> tuple[set[str], set[str]]:
     return parse_session_list(result.stdout)
 
 
+def zellij_session_marker(session_name: str) -> Path | None:
+    """Return Zellij's Windows server-PID marker for a safe session name."""
+    if not WINDOWS or not session_name or any(char in session_name for char in "/\\"):
+        return None
+    socket_dir = os.environ.get("ZELLIJ_SOCKET_DIR")
+    runtime = (
+        Path(socket_dir)
+        if socket_dir
+        else Path(tempfile.gettempdir()) / "zellij" / "contract_version_1"
+    )
+    return runtime / session_name
+
+
+def windows_zellij_server_alive(pid: int) -> bool:
+    """Conservatively check whether a PID still belongs to a Zellij server."""
+    if not WINDOWS:
+        return True
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    error_invalid_parameter = 87
+    still_active = 259
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.GetExitCodeProcess.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)
+    ]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        # Access denied means a process exists but cannot be inspected. Only an
+        # invalid PID is safe to classify as dead.
+        return ctypes.get_last_error() != error_invalid_parameter
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True
+        # A terminated process object can remain queryable while another
+        # process still holds a handle to it. It is no longer a live server.
+        if exit_code.value != still_active:
+            return False
+        buffer = ctypes.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(buffer))
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return True
+        return Path(buffer.value).name.casefold() == "zellij.exe"
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def clear_stale_windows_session(session_name: str) -> bool:
+    """Remove a Windows marker only when its recorded Zellij server is gone."""
+    marker = zellij_session_marker(session_name)
+    if marker is None or marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        value = marker.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return False
+    if not value.isascii() or not value.isdecimal():
+        return False
+    pid = int(value)
+    if pid <= 0 or windows_zellij_server_alive(pid):
+        return False
+    try:
+        # Re-read before unlinking so a newly started server cannot lose its marker.
+        if marker.read_text(encoding="ascii").strip() != value:
+            return False
+        marker.unlink()
+    except (FileNotFoundError, OSError):
+        return False
+    return True
+
+
 def focus_agents_tab(session_name: str, wait: float = 3.0) -> None:
     """Select the agent dashboard for a connected terminal client."""
     commands = [
@@ -1596,9 +1682,18 @@ def open_session(resume_agent: str | None = None, handoff: Path | None = None) -
     if not panels:
         raise RuntimeError(t("no_available_agents"))
     active, exited = zellij_sessions()
+    if name in active and clear_stale_windows_session(name):
+        active, exited = zellij_sessions()
     os.chdir(root)
     if name in active:
-        repaired = repair_active_session(name, panels, root)
+        try:
+            repaired = repair_active_session(name, panels, root)
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+            if not clear_stale_windows_session(name):
+                raise RuntimeError(t("session_unresponsive", name=name)) from error
+            active, exited = zellij_sessions()
+            repaired = []
+    if name in active:
         if repaired:
             print(t("session_repaired", names=", ".join(repaired)))
         if resume_agent and handoff:

@@ -167,6 +167,41 @@ class RondoTests(unittest.TestCase):
         self.assertEqual(active, {"working"})
         self.assertEqual(exited, {"rondo-project"})
 
+    def test_windows_orphaned_zellij_marker_is_removed(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        marker = self.base / "rondo-project"
+        marker.write_text("38760", encoding="ascii")
+        scope = rondo["clear_stale_windows_session"].__globals__
+        with patch.dict(scope, {
+            "WINDOWS": True,
+            "zellij_session_marker": lambda _name: marker,
+            "windows_zellij_server_alive": lambda pid: False,
+        }):
+            self.assertTrue(rondo["clear_stale_windows_session"]("rondo-project"))
+
+        self.assertFalse(marker.exists())
+
+    def test_windows_live_zellij_marker_is_preserved(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        marker = self.base / "rondo-project"
+        marker.write_text("31756", encoding="ascii")
+        scope = rondo["clear_stale_windows_session"].__globals__
+        with patch.dict(scope, {
+            "WINDOWS": True,
+            "zellij_session_marker": lambda _name: marker,
+            "windows_zellij_server_alive": lambda pid: True,
+        }):
+            self.assertFalse(rondo["clear_stale_windows_session"]("rondo-project"))
+
+        self.assertEqual(marker.read_text(encoding="ascii"), "31756")
+
+    def test_windows_zellij_marker_rejects_unsafe_session_names(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["zellij_session_marker"].__globals__
+        with patch.dict(scope, {"WINDOWS": True}):
+            self.assertIsNone(rondo["zellij_session_marker"]("../victim"))
+            self.assertIsNone(rondo["zellij_session_marker"]("..\\victim"))
+
     def test_post_attach_focus_waits_for_a_connected_client(self):
         rondo = load_script("rondo", self.config, self.cache)
         scope = rondo["focus_agents_after_attach"].__globals__
@@ -1200,6 +1235,46 @@ class RondoTests(unittest.TestCase):
             [
                 "zellij", "attach", "rondo-active", "options",
                 "--mouse-mode", "true", "--default-mode", "normal",
+            ],
+        )
+
+    def test_orphaned_active_session_is_replaced_with_a_new_session(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        rondo["write_setting"]("panels", "claude")
+        scope = rondo["open_session"].__globals__
+        sessions = unittest.mock.Mock(side_effect=[
+            ({"rondo-stale"}, set()),
+            (set(), set()),
+        ])
+        repair = unittest.mock.Mock(return_value=[])
+        schedule_focus = unittest.mock.Mock()
+        layout = self.base / "layout.kdl"
+        with (
+            patch.dict(scope, {
+                "repo_root": lambda: self.base,
+                "git_policy": lambda _root: "direct",
+                "rondo_session_name": lambda _root, _custom=None: "rondo-stale",
+                "zellij_sessions": sessions,
+                "clear_stale_windows_session": lambda _name: True,
+                "installed": lambda _name: True,
+                "repair_active_session": repair,
+                "write_layout": lambda _panels: layout,
+                "schedule_agents_focus": schedule_focus,
+            }),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["os"], "chdir"),
+            patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                rondo["open_session"]()
+
+        repair.assert_not_called()
+        schedule_focus.assert_called_once_with("rondo-stale")
+        execvp.assert_called_once_with(
+            "zellij",
+            [
+                "zellij", "-s", "rondo-stale", "-n", str(layout),
+                "options", "--mouse-mode", "true", "--default-mode", "normal",
             ],
         )
 

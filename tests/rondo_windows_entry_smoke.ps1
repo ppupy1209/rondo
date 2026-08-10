@@ -35,8 +35,39 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Config "rondo") | Out-Null
     [Text.UTF8Encoding]::new($false)
 )
 
+function Invoke-Zellij([string[]]$Arguments, [int]$TimeoutSeconds = 5) {
+    $Suffix = [guid]::NewGuid().ToString('N')
+    $Stdout = Join-Path $Temp "zellij-$Suffix.out"
+    $Stderr = Join-Path $Temp "zellij-$Suffix.err"
+    $Command = $null
+    try {
+        $Command = Start-Process -FilePath $Zellij -ArgumentList $Arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
+        if (-not $Command.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-Process -Id $Command.Id -Force -ErrorAction SilentlyContinue
+            throw "Zellij command timed out: $($Arguments -join ' ')"
+        }
+        $Output = ""
+        $ErrorText = ""
+        if (Test-Path -LiteralPath $Stdout) {
+            $Content = Get-Content -LiteralPath $Stdout -Raw
+            if ($null -ne $Content) { $Output = [string]$Content }
+        }
+        if (Test-Path -LiteralPath $Stderr) {
+            $Content = Get-Content -LiteralPath $Stderr -Raw
+            if ($null -ne $Content) { $ErrorText = [string]$Content }
+        }
+        if ($ErrorText.Trim()) { throw $ErrorText.Trim() }
+        return $Output
+    } finally {
+        if ($Command -and -not $Command.HasExited) {
+            Stop-Process -Id $Command.Id -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $Stdout,$Stderr -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Session-Names {
-    return @((& $Zellij list-sessions -n 2>$null) | ForEach-Object {
+    return @((Invoke-Zellij -Arguments @("list-sessions", "-n")) -split "`r?`n" | ForEach-Object {
         if ($_ -match '^(\S+)') { $Matches[1] }
     })
 }
@@ -46,15 +77,15 @@ function Wait-AgentPane([string]$Name) {
     $last = "session did not start"
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
-            $panes = (& $Zellij -s $Name action list-panes --json 2>$null) | ConvertFrom-Json
+            $panes = (Invoke-Zellij -Arguments @("-s", $Name, "action", "list-panes", "--json")) | ConvertFrom-Json
             $agent = $panes | Where-Object {
                 $_.tab_name -eq "agents" -and $_.title -eq "codex" -and -not $_.exited
             } | Select-Object -First 1
             if ($agent) {
-                $screen = (& $Zellij -s $Name action dump-screen --pane-id ([string]$agent.id) 2>$null) -join "`n"
+                $screen = Invoke-Zellij -Arguments @("-s", $Name, "action", "dump-screen", "--pane-id", ([string]$agent.id))
                 if ($screen.Contains("FAKE_AGENT_READY")) {
                     if (-not $agent.is_focused) { throw "agents pane is not focused" }
-                    $tabs = (& $Zellij -s $Name action list-tabs --state --json 2>$null) | ConvertFrom-Json
+                    $tabs = (Invoke-Zellij -Arguments @("-s", $Name, "action", "list-tabs", "--state", "--json")) | ConvertFrom-Json
                     if (-not ($tabs | Where-Object { $_.name -eq "agents" })) {
                         throw "agents tab was not created"
                     }
@@ -90,6 +121,46 @@ try {
     if (-not $Name) { throw "Rondo did not create a session for a non-Git directory" }
     Wait-AgentPane $Name
     Write-Host "Windows Rondo anywhere entry: OK"
+
+    # A force-terminated Zellij server can leave a PID marker that still makes
+    # list-sessions report the dead session as active. Rondo must remove only
+    # that orphaned marker and recreate the same workspace without timing out.
+    $Marker = Join-Path $env:TEMP "zellij\contract_version_1\$Name"
+    if (-not (Test-Path -LiteralPath $Marker -PathType Leaf)) {
+        throw "Windows Zellij server marker was not created"
+    }
+    $ServerPidText = (Get-Content -LiteralPath $Marker -Raw).Trim()
+    if ($ServerPidText -notmatch '^\d+$') { throw "Windows Zellij server marker is invalid" }
+    $ServerPid = [int]$ServerPidText
+    Stop-Process -Id $ServerPid -Force
+    if ($Process -and -not $Process.HasExited) { $Process.WaitForExit(5000) | Out-Null }
+    if (-not (Test-Path -LiteralPath $Marker -PathType Leaf)) {
+        throw "Windows Zellij did not leave the expected orphaned marker"
+    }
+
+    $Process = Start-Process -FilePath $Python -ArgumentList @((Join-Path $Root "bin\rondo")) -WorkingDirectory $Workspace -PassThru -WindowStyle Hidden
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $CurrentServerPidText = ""
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ($Process.HasExited -and $Process.ExitCode -ne 0) {
+            throw "Rondo orphan recovery exited with code $($Process.ExitCode)"
+        }
+        if (Test-Path -LiteralPath $Marker -PathType Leaf) {
+            try { $CurrentServerPidText = (Get-Content -LiteralPath $Marker -Raw).Trim() } catch {
+                $CurrentServerPidText = ""
+            }
+        } else {
+            $CurrentServerPidText = ""
+        }
+        if ($CurrentServerPidText -match '^\d+$' -and $CurrentServerPidText -ne $ServerPidText) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    if ($CurrentServerPidText -notmatch '^\d+$' -or $CurrentServerPidText -eq $ServerPidText) {
+        throw "Rondo did not replace the orphaned Windows Zellij session"
+    }
+    Start-Sleep -Milliseconds 750
+    Wait-AgentPane $Name
+    Write-Host "Windows Rondo orphaned session recovery: OK"
 } finally {
     if ($Name) {
         for ($attempt = 1; $attempt -le 5; $attempt++) {
