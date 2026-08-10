@@ -2,6 +2,23 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/), 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 따릅니다.
 
+## [0.15.4] - 2026-08-10
+
+### 추가
+
+- 첫 설정과 `rondo setup`에 `일일이 승인`·`프로젝트 안에서 자동 승인` 선택 화면 추가
+- 승인 모드를 Claude, Codex, Gemini의 안전한 네이티브 옵션으로 공통 적용
+
+### 변경
+
+- AI 간 요청 시 `rondo message`를 즉시 실행해 대상 AI 패널에 직접 입력하도록 세션 지침 강화
+- Relay는 주 전달 화면이 아니라 복구·감사용 사본으로 역할 명확화
+- 공유 `context.md`에 활성 AI와 승인 모드 기록
+
+### 수정
+
+- 종료된 Zellij 화면과 이전 활성 세션 기록을 새 실행 전에 정리해 메시지가 오래된 세션을 가리키던 문제 수정
+
 ## [0.15.3] - 2026-08-10
 
 ### 변경
@@ -58,6 +75,7 @@ Rondo를 Codex CLI, Claude Code, Gemini CLI의 가벼운 보조 도구로 다시
 이전 릴리스 기록은 [GitHub Releases](https://github.com/ppupy1209/rondo/releases)에서 확인할 수 있습니다.
 
 [0.15.3]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.3
+[0.15.4]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.4
 [0.15.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.2
 [0.15.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.1
 [0.15.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.0

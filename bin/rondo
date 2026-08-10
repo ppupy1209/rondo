@@ -21,12 +21,12 @@ HELP = """Rondo {version} - AI CLI 사이의 가벼운 인계 도구
 
 사용법:
   rondo                         현재 프로젝트의 AI 패널과 Relay 열기
-  rondo setup                   Claude, Codex, Gemini 사용 여부 설정
+  rondo setup                   사용할 AI와 승인 모드 설정
   rondo context on|off          구조화된 작업 맥락 공유 켜기/끄기
   rondo task "목표"             현재 작업 목표 기록
   rondo checkpoint "요약"       다음 AI가 이어갈 핵심 상태 기록
   rondo next [AI] ["요약"]      다른 AI에게 작업 인계
-  rondo message <AI> "메시지"   AI 간 메시지를 Relay에 공개하고 전달
+  rondo message <AI> "메시지"   대상 AI 화면에 직접 입력하고 Relay에 기록
   rondo request-review [AI]     구현과 분리된 최종 검증 요청
   rondo review pass|fail "요약" 독립 검증 결과 기록
   rondo status                  현재 작업·인계·검증 상태 표시
@@ -185,7 +185,41 @@ def choose_agents(available: List[str], defaults: List[str]) -> List[str]:
             raise KeyboardInterrupt
 
 
-def setup(root: Path, requested: Optional[str] = None, context: Optional[bool] = None) -> dict:
+def choose_approval(default: str) -> str:
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise core.RondoError("승인 모드 선택에는 대화형 터미널이 필요합니다. 자동화에서는 `rondo setup --approval manual`을 사용하세요.")
+    options = (
+        ("manual", "일일이 승인", "수정과 명령을 직접 확인"),
+        ("workspace", "프로젝트 안에서 자동 승인", "프로젝트 밖과 위험 작업은 계속 보호"),
+    )
+    cursor = next((index for index, item in enumerate(options) if item[0] == default), 0)
+    rendered = False
+    while True:
+        if rendered:
+            sys.stdout.write("\x1b[4A")
+        lines = ["승인 모드 선택 (↑/↓ 이동)"]
+        for index, (_value, label, detail) in enumerate(options):
+            lines.append("%s (%s) %s - %s" % (">" if index == cursor else " ", "x" if index == cursor else " ", label, detail))
+        lines.append("Enter 완료 · Esc 취소")
+        sys.stdout.write("".join("\r\x1b[2K%s\n" % line for line in lines))
+        sys.stdout.flush()
+        key = _read_key()
+        if key == "up":
+            cursor = (cursor - 1) % len(options)
+        elif key == "down":
+            cursor = (cursor + 1) % len(options)
+        elif key == "confirm":
+            return options[cursor][0]
+        elif key == "cancel":
+            raise KeyboardInterrupt
+
+
+def setup(
+    root: Path,
+    requested: Optional[str] = None,
+    context: Optional[bool] = None,
+    approval: Optional[str] = None,
+) -> dict:
     available = installed_agents()
     config_path = core.state_dir(root) / "config.json"
     previous = core.load_config(root) if config_path.exists() else dict(core.DEFAULT_CONFIG)
@@ -205,10 +239,20 @@ def setup(root: Path, requested: Optional[str] = None, context: Optional[bool] =
     if missing:
         raise core.RondoError("공식 CLI가 PATH에 없습니다: %s" % ", ".join(missing))
     previous["agents"] = agents
+    if approval is None and requested is None:
+        approval = choose_approval(previous.get("approval", "manual"))
+    if approval is not None:
+        if approval not in ("manual", "workspace"):
+            raise core.RondoError("승인 모드는 manual 또는 workspace 중 하나여야 합니다.")
+        previous["approval"] = approval
     if context is not None:
         previous["context"] = context
     config, _state = core.init_project(root, previous)
-    print("설정 완료: %s / 맥락 공유 %s" % (", ".join(core.display_name(a) for a in agents), "켜짐" if config["context"] else "꺼짐"))
+    approval_label = "일일이 승인" if config["approval"] == "manual" else "프로젝트 안에서 자동 승인"
+    print("설정 완료: %s / 승인: %s / 맥락 공유 %s" % (
+        ", ".join(core.display_name(a) for a in agents), approval_label,
+        "켜짐" if config["context"] else "꺼짐",
+    ))
     return config
 
 
@@ -226,12 +270,16 @@ def open_session(root: Path) -> int:
     name = core.session_name(root)
     os.environ["RONDO_PROJECT_ROOT"] = str(root)
     os.environ["RONDO_ZELLIJ_SESSION"] = name
-    if core.zellij_session_exists(name):
+    session_status = core.zellij_session_status(name)
+    if session_status == "active":
         return subprocess.call([
             zellij, "attach", name, "options", "--mouse-mode", "true",
             "--default-mode", "normal", "--simplified-ui", "true",
         ])
+    if session_status == "exited" and not core.delete_exited_zellij_session(name):
+        raise core.RondoError("종료된 이전 Rondo 화면을 정리하지 못했습니다. 잠시 후 다시 실행하세요.")
     core.cleanup_stale_windows_marker(name)
+    core.retire_active_sessions(root)
     layout = write_layout(root, config["agents"])
     return subprocess.call(
         [
@@ -273,6 +321,7 @@ def show_status(root: Path) -> None:
     review = state["review"]
     print("AI: %s" % ", ".join(core.display_name(a) for a in config["agents"]))
     print("맥락 공유: %s" % ("켜짐" if config["context"] else "꺼짐"))
+    print("승인 모드: %s" % ("일일이 승인" if config["approval"] == "manual" else "프로젝트 안에서 자동 승인"))
     print("작업: %s" % (task.get("goal") or "기록되지 않음"))
     print("현재 담당: %s" % (task.get("owner") or "없음"))
     print("상태: %s / 독립 검증: %s" % (task.get("status", "idle"), review.get("status", "not_requested")))
@@ -305,6 +354,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     elif command == "setup":
         requested = None
         context = None
+        approval = None
         if "--agents" in rest:
             index = rest.index("--agents")
             if index + 1 >= len(rest):
@@ -314,7 +364,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             context = True
         if "--context-off" in rest:
             context = False
-        setup(root, requested, context)
+        if "--approval" in rest:
+            index = rest.index("--approval")
+            if index + 1 >= len(rest):
+                raise core.RondoError("--approval 뒤에 manual 또는 workspace가 필요합니다.")
+            approval = rest[index + 1]
+        setup(root, requested, context, approval)
     elif command == "context":
         if len(rest) != 1 or rest[0] not in ("on", "off"):
             raise core.RondoError("사용법: rondo context on|off")
@@ -360,11 +415,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             if data.get("agent") == recipient and data.get("status") == "active"
         ]
         os.environ.setdefault("RONDO_ZELLIJ_SESSION", core.session_name(root))
+        delivery_error = ""
         try:
             delivered = bool(targets and core.deliver_to_session(root, targets[-1], message["text"]))
-        except core.RondoError:
+        except core.RondoError as error:
             delivered = False
-        print("메시지를 Relay에 공개%s." % ("하고 전달했습니다" if delivered else "했습니다"))
+            delivery_error = str(error)
+        if delivered:
+            print("%s 화면에 직접 입력했습니다. Relay에는 사본을 남겼습니다." % core.display_name(recipient))
+        else:
+            print("%s 화면에 직접 입력하지 못했습니다. Relay에 사본을 남겼습니다." % core.display_name(recipient))
+            if delivery_error:
+                print("원인: %s" % delivery_error)
     elif command == "request-review":
         agent, session = current_identity()
         requested = rest[0] if rest else ""

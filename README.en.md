@@ -8,7 +8,7 @@ Rondo does not replace Codex CLI, Claude Code, or Gemini CLI. It is a small comp
 - Bounded project-local context containing goals, checkpoints, changed-file summaries, handoffs, and review results.
 - Automatic failover only after an explicit quota-exhaustion message is observed twice.
 - A session that implemented the change cannot approve its final review.
-- Checkpoints, messages, handoffs, and review requests are visible as text in the Relay tab.
+- Requests between AIs are typed directly into the target pane as if a person entered them, while Relay keeps a recovery and audit copy.
 
 Rondo does not ingest full conversations or hidden reasoning, store provider credentials, run a server, or call a model API.
 
@@ -19,24 +19,31 @@ Install and sign in to at least one official provider CLI first: `codex`, `claud
 Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.3/install.ps1))) -Version v0.15.3
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.4/install.ps1))) -Version v0.15.4
 ```
 
 macOS / Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.3/install.sh | RONDO_VERSION=v0.15.3 sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.4/install.sh | RONDO_VERSION=v0.15.4 sh
 ```
 
 The installer checks for Python 3.10+ and installs a SHA-256-verified Zellij 0.44.3 build. It never installs or updates provider CLIs.
 
 ## First run
 
-Run `rondo` in any project directory. On the first run, move with the arrow keys, toggle AIs with `Space`, and finish with `Enter`; no agent names need to be typed. Later runs enter that project's tabs immediately.
+Run `rondo` in any project directory. On the first run, move with the arrow keys, toggle AIs with `Space`, and finish with `Enter`. Then choose an approval mode with the arrow keys and `Enter`; no names need to be typed. Later runs enter that project's tabs immediately.
+
+The two approval modes are:
+
+- **Approve each action**: the user reviews edits and commands. This is the default for new projects.
+- **Auto-approve inside the project**: each official CLI keeps its safety boundary while handling project work automatically. Rondo uses Claude `auto`, Codex automatic review with `workspace-write`, and Gemini auto-edit inside its sandbox. Rondo never enables an unrestricted bypass mode.
+
+Run `rondo setup` again to change either choice. Automation can use `rondo setup --agents claude,codex --approval manual|workspace`.
 
 With two AIs, Rondo places them side by side in the `Agents` tab. With three, the first AI gets a large pane on the left and the other two are stacked on the right. Click a pane or press `Ctrl+p` followed by an arrow key to move between AIs. Press `Ctrl+p`, then `f` to toggle the focused pane fullscreen.
 
-Relay remains a separate tab; use `Ctrl+t` followed by an arrow key to switch to it. Zellij's status bar stays visible at the bottom with available shortcuts. Press `Ctrl+o`, then `d` to detach while keeping the session, or `Ctrl+q` to stop the AIs and session. Rondo enables Zellij's font-compatible simplified UI, mouse support, and normal mode.
+Relay remains a separate tab; use `Ctrl+t` followed by an arrow key to switch to it. A cross-AI request is typed and submitted in the target AI pane immediately, with the same text retained in Relay as an audit record. Zellij's status bar stays visible at the bottom with available shortcuts. Press `Ctrl+o`, then `d` to detach while keeping the session, or `Ctrl+q` to stop the AIs and session. Rondo enables Zellij's font-compatible simplified UI, mouse support, and normal mode.
 
 On macOS and Linux, Rondo uses a short private Zellij socket path so long project or temporary paths cannot trigger the misleading `session name must be less than 0 characters` error.
 
@@ -66,12 +73,12 @@ Rondo rejects that command in any session that participated in implementation. A
 
 ```text
 rondo                         open split AI panes and Relay
-rondo setup                   change enabled AIs
+rondo setup                   change enabled AIs and approval mode
 rondo context on|off          enable or disable shared context
 rondo task "goal"             record the current goal
 rondo checkpoint "summary"    record the minimum continuation state
 rondo next [AI] ["summary"]   hand work to another AI
-rondo message <AI> "message"  send a visible message
+rondo message <AI> "message"  type into the target pane and retain a Relay copy
 rondo request-review [AI]     request independent verification
 rondo review pass|fail "text" record the independent result
 rondo status                  show current coordination state
@@ -79,7 +86,7 @@ rondo status                  show current coordination state
 
 ## Local project data
 
-Rondo creates `.rondo/config.json`, `state.json`, `context.md`, `messages.jsonl`, and `layout.kdl`. Context is capped at 32 KiB; Relay messages rotate at 1 MiB. Rondo adds `/.rondo/` only to the repository's `.git/info/exclude`, leaving the shared `.gitignore` untouched.
+Rondo creates `.rondo/config.json`, `state.json`, `context.md`, `messages.jsonl`, and `layout.kdl`. Context is capped at 32 KiB; Relay messages rotate at 1 MiB. `context.md` contains the enabled AIs, approval mode, current goal, checkpoints, handoffs, independent review, and a Git working-tree summary. Rondo adds `/.rondo/` only to the repository's `.git/info/exclude`, leaving the shared `.gitignore` untouched.
 
 `rondo context off` removes `context.md` and stops recreating it. Minimal configuration, session state, and visible messages remain so coordination still works. Secret-like values are redacted, but `.rondo` is not a secret vault; never place passwords, tokens, or personal data in a checkpoint or message.
 
