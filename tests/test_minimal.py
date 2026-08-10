@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import unittest
 import uuid
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -59,7 +61,7 @@ class ProjectCase(unittest.TestCase):
 
 class MinimalCoreTests(ProjectCase):
     def test_version_and_supported_agents_are_deliberately_small(self):
-        self.assertEqual(__version__, "0.15.1")
+        self.assertEqual(__version__, "0.15.2")
         self.assertEqual(core.AGENTS, ("claude", "codex", "gemini"))
         with self.assertRaises(core.RondoError):
             core.normalize_agent("grok")
@@ -187,6 +189,28 @@ class MinimalCoreTests(ProjectCase):
 
 
 class LayoutTests(ProjectCase):
+    def test_interactive_picker_uses_keys_instead_of_agent_text(self):
+        cli = load_cli()
+        output = StringIO()
+        keys = ("down", "down", "toggle", "confirm")
+        with redirect_stdout(output), mock.patch.object(output, "isatty", return_value=True), mock.patch.object(
+            cli.sys.stdin, "isatty", return_value=True
+        ), mock.patch.object(cli, "_read_key", side_effect=keys):
+            selected = cli.choose_agents(list(core.AGENTS), list(core.AGENTS))
+
+        self.assertEqual(selected, ["claude", "codex"])
+        self.assertIn("Space 선택/해제", output.getvalue())
+
+    @unittest.skipIf(os.name == "nt", "Unix socket paths do not apply on Windows")
+    def test_rondo_uses_a_short_private_zellij_socket_directory(self):
+        with mock.patch.dict(os.environ, {"ZELLIJ_SOCKET_DIR": "/an/intentionally/long/user/socket/path"}):
+            with mock.patch.object(core.shutil, "which", return_value="/usr/bin/zellij"):
+                self.assertEqual(core.zellij_executable(), "/usr/bin/zellij")
+            socket_dir = Path(os.environ["ZELLIJ_SOCKET_DIR"])
+            self.assertEqual(socket_dir, Path("/tmp") / ("rondo-zellij-%s" % os.getuid()))
+            self.assertTrue(socket_dir.is_dir())
+            self.assertEqual(socket_dir.stat().st_mode & 0o777, 0o700)
+
     def test_layout_splits_enabled_agents_in_one_tab_and_keeps_relay_separate(self):
         cli = load_cli()
         core.ensure_safe_state_dir(self.root)
@@ -247,7 +271,7 @@ class DistributionTests(unittest.TestCase):
     def test_release_version_is_consistent(self):
         for name in ("README.md", "README.en.md", "CHANGELOG.md"):
             text = (ROOT / name).read_text(encoding="utf-8")
-            self.assertIn("0.15.1", text)
+            self.assertIn("0.15.2", text)
 
 
 class CleanupTests(unittest.TestCase):

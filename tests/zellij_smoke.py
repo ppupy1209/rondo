@@ -63,16 +63,14 @@ def main():
         fake = base / "fake-agent"
         fake.write_text("#!/bin/sh\nexec python3 %s \"$@\"\n" % json.dumps(str(FAKE)), encoding="utf-8")
         fake.chmod(0o755)
-        socket = base / "socket"
         config = base / "zellij-config"
-        socket.mkdir()
         config.mkdir()
         env = os.environ.copy()
         env.update(
             {
                 "PATH": str(ROOT / "bin") + os.pathsep + env["PATH"],
-                "ZELLIJ_SOCKET_DIR": str(socket),
                 "ZELLIJ_CONFIG_DIR": str(config),
+                "ZELLIJ_SOCKET_DIR": str(base / ("intentionally-long-socket-path-" + "x" * 80)),
                 "RONDO_CLAUDE_COMMAND": str(fake),
                 "RONDO_CODEX_COMMAND": str(fake),
                 "RONDO_GEMINI_COMMAND": str(fake),
@@ -96,6 +94,7 @@ def main():
             stdout=slave, stderr=slave, start_new_session=True,
         )
         os.close(slave)
+        env["ZELLIJ_SOCKET_DIR"] = "/tmp/rondo-zellij-%s" % os.getuid()
         try:
             for title in ("Claude", "Codex", "Gemini"):
                 wait_screen(env, name, title, "FAKE_AGENT_READY")

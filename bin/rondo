@@ -88,29 +88,101 @@ def installed_agents() -> List[str]:
     return [agent for agent in core.AGENTS if core.provider_executable(agent)]
 
 
+def _read_key() -> str:
+    if os.name == "nt":
+        import msvcrt
+
+        key = msvcrt.getwch()
+        if key in ("\x00", "\xe0"):
+            return {"H": "up", "P": "down"}.get(msvcrt.getwch(), "")
+        if key == "\x03":
+            raise KeyboardInterrupt
+        return {" ": "toggle", "\r": "confirm", "\x1b": "cancel"}.get(key, "")
+
+    import select
+    import termios
+    import tty
+
+    descriptor = sys.stdin.fileno()
+    previous = termios.tcgetattr(descriptor)
+    try:
+        tty.setraw(descriptor)
+        key = os.read(descriptor, 1)
+        if key == b"\x03":
+            raise KeyboardInterrupt
+        if key == b"\x1b":
+            sequence = key
+            while len(sequence) < 3 and select.select([descriptor], [], [], 0.05)[0]:
+                sequence += os.read(descriptor, 3 - len(sequence))
+            return {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b": "cancel"}.get(sequence, "")
+        return {b" ": "toggle", b"\r": "confirm", b"\n": "confirm"}.get(key, "")
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
+
+
+def choose_agents(available: List[str], defaults: List[str]) -> List[str]:
+    if not available:
+        raise core.RondoError("설치된 공식 AI CLI가 없습니다. Codex, Claude, Gemini 중 하나를 먼저 설치하세요.")
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise core.RondoError("AI 선택에는 대화형 터미널이 필요합니다. 자동화에서는 `rondo setup --agents claude,codex`를 사용하세요.")
+
+    enabled = {agent for agent in defaults if agent in available} or set(available)
+    cursor = next(index for index, agent in enumerate(core.AGENTS) if agent in available)
+    status = "Space 선택/해제 · Enter 완료 · Esc 취소"
+    line_count = len(core.AGENTS) + 2
+    rendered = False
+    while True:
+        if rendered:
+            sys.stdout.write("\x1b[%dA" % line_count)
+        lines = ["사용할 AI 선택 (↑/↓ 이동)"]
+        for index, agent in enumerate(core.AGENTS):
+            marker = ">" if index == cursor else " "
+            if agent not in available:
+                lines.append("%s [-] %s (설치되지 않음)" % (marker, core.display_name(agent)))
+            else:
+                lines.append("%s [%s] %s" % (marker, "x" if agent in enabled else " ", core.display_name(agent)))
+        lines.append(status)
+        sys.stdout.write("".join("\r\x1b[2K%s\n" % line for line in lines))
+        sys.stdout.flush()
+        rendered = True
+
+        key = _read_key()
+        selectable = [index for index, agent in enumerate(core.AGENTS) if agent in available]
+        position = selectable.index(cursor)
+        if key == "up":
+            cursor = selectable[(position - 1) % len(selectable)]
+        elif key == "down":
+            cursor = selectable[(position + 1) % len(selectable)]
+        elif key == "toggle":
+            agent = core.AGENTS[cursor]
+            enabled.symmetric_difference_update({agent})
+        elif key == "confirm":
+            if enabled:
+                return [agent for agent in core.AGENTS if agent in enabled]
+            status = "최소 한 개의 AI를 선택하세요."
+        elif key == "cancel":
+            raise KeyboardInterrupt
+
+
 def setup(root: Path, requested: Optional[str] = None, context: Optional[bool] = None) -> dict:
     available = installed_agents()
+    config_path = core.state_dir(root) / "config.json"
+    previous = core.load_config(root) if config_path.exists() else dict(core.DEFAULT_CONFIG)
     if requested is None:
-        print("\n설치된 AI CLI")
-        for agent in core.AGENTS:
-            print("  %s %s" % ("[x]" if agent in available else "[ ]", core.display_name(agent)))
-        default = ",".join(available)
-        raw = input("\n사용할 AI (쉼표로 구분) [%s]: " % default).strip() or default
+        agents = choose_agents(available, previous["agents"])
     else:
-        raw = requested
-    if not raw.strip():
-        raise core.RondoError("설치된 공식 AI CLI가 없습니다. Codex, Claude, Gemini 중 하나를 먼저 설치하세요.")
-    agents = []
-    for item in raw.split(","):
-        agent = core.normalize_agent(item)
-        if agent not in agents:
-            agents.append(agent)
+        if not requested.strip():
+            raise core.RondoError("최소 한 개의 AI를 선택하세요.")
+        agents = []
+        for item in requested.split(","):
+            agent = core.normalize_agent(item)
+            if agent not in agents:
+                agents.append(agent)
     if not agents:
         raise core.RondoError("최소 한 개의 AI를 선택하세요.")
     missing = [core.display_name(agent) for agent in agents if not core.provider_executable(agent)]
     if missing:
         raise core.RondoError("공식 CLI가 PATH에 없습니다: %s" % ", ".join(missing))
-    previous = core.load_config(root)
     previous["agents"] = agents
     if context is not None:
         previous["context"] = context

@@ -2,6 +2,16 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/), 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 따릅니다.
 
+## [0.15.2] - 2026-08-10
+
+### 변경
+
+- 첫 실행과 `rondo setup`의 AI 설정을 직접 입력 대신 방향키·Space·Enter 선택 화면으로 변경
+
+### 수정
+
+- macOS와 Linux의 긴 Zellij 소켓 경로에서 세션 시작이 `less than 0 characters` 오류로 실패하던 문제 수정
+
 ## [0.15.1] - 2026-08-10
 
 ### 변경
@@ -39,5 +49,6 @@ Rondo를 Codex CLI, Claude Code, Gemini CLI의 가벼운 보조 도구로 다시
 
 이전 릴리스 기록은 [GitHub Releases](https://github.com/ppupy1209/rondo/releases)에서 확인할 수 있습니다.
 
+[0.15.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.2
 [0.15.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.1
 [0.15.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.0
