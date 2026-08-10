@@ -631,6 +631,17 @@ def zellij_session_name() -> str:
 
 def zellij_executable() -> str:
     """Return the bundled Zellij path when a launcher supplied one."""
+    if os.name != "nt":
+        socket_dir = Path("/tmp") / ("rondo-zellij-%s" % os.getuid())
+        try:
+            socket_dir.mkdir(mode=0o700, exist_ok=True)
+            info = socket_dir.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                raise OSError("unsafe owner or file type")
+            socket_dir.chmod(0o700)
+        except OSError as error:
+            raise RondoError("Zellij 소켓 디렉터리를 안전하게 준비할 수 없습니다: %s" % error) from error
+        os.environ["ZELLIJ_SOCKET_DIR"] = str(socket_dir)
     override = os.environ.get("RONDO_ZELLIJ_PATH", "").strip()
     return override or (shutil.which("zellij") or "")
 
