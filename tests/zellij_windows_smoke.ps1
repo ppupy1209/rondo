@@ -65,13 +65,23 @@ try {
 } finally {
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = "SilentlyContinue"
-    & $Zellij delete-session --force $Name 2>$null | Out-Null
-    $ErrorActionPreference = $previousPreference
-    if ($process -and -not $process.HasExited) {
-        $process.WaitForExit(3000) | Out-Null
-        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+    $deleted = $false
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        & $Zellij delete-session --force $Name 2>$null | Out-Null
+        if ($process -and -not $process.HasExited) {
+            $process.WaitForExit(1000) | Out-Null
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+        }
+        $sessions = (& $Zellij list-sessions -n 2>$null) -join "`n"
+        if ($sessions -notmatch "(?m)^$([regex]::Escape($Name))(?:\s|$)") {
+            $deleted = $true
+            break
+        }
+        Start-Sleep -Milliseconds 250
     }
     if (Test-Path -LiteralPath $Temp) { Remove-Item -LiteralPath $Temp -Recurse -Force }
+    $ErrorActionPreference = $previousPreference
+    if (-not $deleted) { throw "Windows Zellij smoke leaked session: $Name" }
 }
 
 # Cleanup commands may legitimately report that the already-exited session is

@@ -2,6 +2,17 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.14.2] - 2026-08-10
+
+### 변경
+
+- 첫 설정 뒤에는 Git 저장소 여부와 관계없이 어느 폴더에서든 `rondo`로 해당 위치의 `agents` 패널에 바로 진입
+- 활성·복원 세션 연결 직후 `agents` 탭을 강제로 선택하고 새 레이아웃에서도 에이전트 탭을 우선 표시
+
+### 수정
+
+- Windows 실제 Zellij 검사 뒤 테스트 세션이 남으면 성공 처리하지 않도록 정리 검증 강화
+
 ## [0.14.1] - 2026-08-10
 
 ### 수정
@@ -99,6 +110,7 @@
 - 제거 전 전체 대상 사전 검증과 Rondo가 소유한 launcher·hook만 제거
 - 진단 묶음은 허용 목록 기반 메타데이터만 기록하고 기존 파일을 덮어쓰지 않음
 
+[0.14.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.2
 [0.14.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.1
 [0.14.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.0
 [0.13.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.13.1

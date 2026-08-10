@@ -30,7 +30,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.14.1"
+VERSION = "0.14.2"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -1249,6 +1249,62 @@ def zellij_sessions() -> tuple[set[str], set[str]]:
     return parse_session_list(result.stdout)
 
 
+def focus_agents_tab(session_name: str, wait: float = 3.0) -> None:
+    """Select the agent dashboard for a connected terminal client."""
+    command = ["zellij", "-s", session_name, "action", "go-to-tab-name", "agents"]
+    deadline = time.monotonic() + wait
+    last = ""
+    while True:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return
+        last = result.stderr.strip() or result.stdout.strip()
+        if time.monotonic() >= deadline:
+            raise RuntimeError(last or t("pane_lookup_failed"))
+        time.sleep(0.1)
+
+
+def focus_agents_after_attach(session_name: str, wait: float = 5.0) -> None:
+    """Wait for a terminal client, then move that client to the dashboard."""
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["zellij", "-s", session_name, "action", "list-clients"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        clients = [
+            line for line in result.stdout.splitlines()
+            if line.strip() and not line.startswith("CLIENT_ID")
+        ]
+        if result.returncode == 0 and clients:
+            focus_agents_tab(session_name)
+            return
+        time.sleep(0.1)
+
+
+def schedule_agents_focus(session_name: str) -> None:
+    """Run the post-attach focus helper independently of this process."""
+    options: dict[str, object] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+        "cwd": str(Path(__file__).resolve().parent.parent),
+    }
+    if WINDOWS:
+        options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        options["start_new_session"] = True
+    subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "__focus-agents", session_name],
+        **options,
+    )
+
+
 def configured_panels() -> list[str]:
     values = read_setting("panels").split()
     if (
@@ -1273,6 +1329,7 @@ def write_layout(panels: list[str]) -> Path:
     status_command = "rondo-status.cmd" if WINDOWS else "rondo-status"
     lines = [
         "layout {",
+        '    tab name="shell"',
         '    tab name="agents" focus=true {',
         f'        pane name="status" command="{status_command}" size=1 borderless=true',
         '        pane split_direction="vertical" {',
@@ -1284,7 +1341,7 @@ def write_layout(panels: list[str]) -> Path:
             f'                pane name="{name}" command={kdl_string(pane_command(name))}' for name in rest
         )
         lines.append("            }")
-    lines.extend(["        }", "    }", '    tab name="shell"', "}"])
+    lines.extend(["        }", "    }", "}"])
     temp = target.with_suffix(".tmp")
     temp.write_text("\n".join(lines) + "\n")
     temp.replace(target)
@@ -1508,7 +1565,6 @@ def open_session(resume_agent: str | None = None, handoff: Path | None = None) -
     if shutil.which("zellij") is None:
         raise RuntimeError(t("not_installed", name="zellij"))
     root = repo_root()
-    require_git_repo(root)
     os.environ["RONDO_GIT_POLICY"] = git_policy(root)
     name = rondo_session_name(root)
     if not (CONFIG_DIR / "panels").exists():
@@ -1521,20 +1577,33 @@ def open_session(resume_agent: str | None = None, handoff: Path | None = None) -
     if not panels:
         raise RuntimeError(t("no_available_agents"))
     active, exited = zellij_sessions()
+    os.chdir(root)
     if name in active:
         repaired = repair_active_session(name, panels, root)
         if repaired:
             print(t("session_repaired", names=", ".join(repaired)))
         if resume_agent and handoff:
             send_agent_message(resume_agent, [resume_prompt(handoff)], session_name=name)
+        schedule_agents_focus(name)
         os.execvp("zellij", ["zellij", "attach", name])
     layout = write_layout(panels)
     print(f"{t('panels')}: {' '.join(panels)}")
-    os.chdir(root)
     if name in exited:
-        os.execvp(
-            "zellij", ["zellij", "attach", "--force-run-commands", name]
+        subprocess.run(
+            [
+                "zellij", "attach", "--create-background",
+                "--force-run-commands", name,
+            ],
+            check=True,
         )
+        repaired = repair_active_session(name, panels, root)
+        if repaired:
+            print(t("session_repaired", names=", ".join(repaired)))
+        if resume_agent and handoff:
+            send_agent_message(resume_agent, [resume_prompt(handoff)], session_name=name)
+        schedule_agents_focus(name)
+        os.execvp("zellij", ["zellij", "attach", name])
+    schedule_agents_focus(name)
     os.execvp("zellij", ["zellij", "-s", name, "-n", str(layout)])
 
 
@@ -3953,6 +4022,10 @@ def main() -> int:
         return uninstall_command(args[1:])
     elif command == "support-bundle":
         return support_bundle_command(args[1:])
+    elif command == "__focus-agents":
+        if len(args) != 2 or safe_session_name(args[1]) != args[1]:
+            raise RuntimeError("Invalid Rondo session name")
+        focus_agents_after_attach(args[1])
     elif command:
         known = [
             "menu", "status", "setup", "add", "open", "send", "handoff", "resume", "task", "learn", "recall", "note", "history", "schedule", "proof", "review",

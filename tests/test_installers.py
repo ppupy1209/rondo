@@ -82,6 +82,18 @@ try {{
         self.assertIn("Run now in this PowerShell", source)
         self.assertIn("close all terminal windows", source)
 
+    def test_windows_zellij_smoke_never_leaks_a_session(self) -> None:
+        source = (ROOT / "tests" / "zellij_windows_smoke.ps1").read_text(encoding="utf-8")
+        self.assertIn("list-sessions -n", source)
+        self.assertIn("Windows Zellij smoke leaked session", source)
+
+    def test_windows_ci_opens_rondo_in_a_non_git_directory(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        source = (ROOT / "tests" / "rondo_windows_entry_smoke.ps1").read_text(encoding="utf-8")
+        self.assertIn("rondo_windows_entry_smoke.ps1", workflow)
+        self.assertIn("agents tab was not created", source)
+        self.assertIn("Rondo did not create a session for a non-Git directory", source)
+
     def test_readme_install_urls_match_the_cli_version(self) -> None:
         version = subprocess.run(
             [sys.executable, str(ROOT / "bin" / "rondo"), "--version"],

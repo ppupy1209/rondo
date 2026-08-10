@@ -167,10 +167,40 @@ class RondoTests(unittest.TestCase):
         self.assertEqual(active, {"working"})
         self.assertEqual(exited, {"rondo-project"})
 
+    def test_post_attach_focus_waits_for_a_connected_client(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["focus_agents_after_attach"].__globals__
+        waiting = unittest.mock.Mock(returncode=0, stdout="CLIENT_ID COMMAND\n")
+        connected = unittest.mock.Mock(
+            returncode=0, stdout="CLIENT_ID COMMAND\n1 codex\n"
+        )
+        focus = unittest.mock.Mock()
+        with (
+            patch.dict(scope, {"focus_agents_tab": focus}),
+            patch.object(scope["subprocess"], "run", side_effect=[waiting, connected]),
+            patch.object(scope["time"], "sleep"),
+        ):
+            rondo["focus_agents_after_attach"]("rondo-project")
+
+        focus.assert_called_once_with("rondo-project")
+
+    def test_focus_helper_does_not_hold_the_project_directory(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["schedule_agents_focus"].__globals__
+        with patch.object(scope["subprocess"], "Popen") as popen:
+            rondo["schedule_agents_focus"]("rondo-project")
+
+        self.assertEqual(popen.call_args.kwargs["cwd"], str(ROOT))
+        self.assertEqual(
+            popen.call_args.args[0][-2:], ["__focus-agents", "rondo-project"]
+        )
+
     def test_exited_rondo_session_is_resurrected(self):
         rondo = load_script("rondo", self.config, self.cache)
         rondo["write_setting"]("panels", "claude")
         scope = rondo["open_session"].__globals__
+        schedule_focus = unittest.mock.Mock()
+        repair = unittest.mock.Mock(return_value=[])
 
         with (
             patch.dict(
@@ -178,23 +208,35 @@ class RondoTests(unittest.TestCase):
                 {
                 "repo_root": lambda: Path("/tmp/project"),
                 "rondo_session_name": lambda _root, _custom=None: "rondo-project",
-                "require_git_repo": lambda _root: None,
-                    "zellij_sessions": lambda: (set(), {"rondo-project"}),
-                    "installed": lambda _name: True,
-                    "write_layout": lambda _panels: Path("/tmp/layout.kdl"),
+                "git_policy": lambda _root: "direct",
+                "zellij_sessions": lambda: (set(), {"rondo-project"}),
+                "installed": lambda _name: True,
+                "write_layout": lambda _panels: Path("/tmp/layout.kdl"),
+                "schedule_agents_focus": schedule_focus,
+                "repair_active_session": repair,
                 },
             ),
             patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
             patch.object(scope["os"], "chdir") as chdir,
+            patch.object(scope["subprocess"], "run") as run,
             patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
         ):
             with self.assertRaisesRegex(RuntimeError, "stop"):
                 rondo["open_session"]()
 
         chdir.assert_called_once_with(Path("/tmp/project"))
+        run.assert_called_once_with(
+            [
+                "zellij", "attach", "--create-background",
+                "--force-run-commands", "rondo-project",
+            ],
+            check=True,
+        )
+        schedule_focus.assert_called_once_with("rondo-project")
+        repair.assert_called_once_with("rondo-project", ["claude"], Path("/tmp/project"))
         execvp.assert_called_once_with(
             "zellij",
-            ["zellij", "attach", "--force-run-commands", "rondo-project"],
+            ["zellij", "attach", "rondo-project"],
         )
 
     def test_settings_are_atomic_and_private(self):
@@ -261,6 +303,7 @@ class RondoTests(unittest.TestCase):
                 "installed": lambda _name: True,
                 "write_layout": lambda _panels: self.base / "layout.kdl",
                 "git_policy": lambda _root: "direct",
+                "schedule_agents_focus": lambda _name: None,
             }),
             patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
             patch.object(scope["os"], "chdir"),
@@ -582,6 +625,7 @@ class RondoTests(unittest.TestCase):
         self.assertIn(f'command="codex-session{suffix}"', layout)
         self.assertIn(f'command="kimi-session{suffix}"', layout)
         self.assertIn('tab name="shell"', layout)
+        self.assertLess(layout.index('tab name="shell"'), layout.index('tab name="agents" focus=true'))
 
     def test_windows_layout_uses_cmd_launchers(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -1064,15 +1108,58 @@ class RondoTests(unittest.TestCase):
                 rondo["main"]()
         opener.assert_not_called()
 
-    def test_open_session_requires_a_git_repository(self):
+    def test_open_session_works_outside_a_git_repository(self):
         rondo = load_script("rondo", self.config, self.cache)
+        rondo["write_setting"]("panels", "claude")
         scope = rondo["open_session"].__globals__
+        schedule_focus = unittest.mock.Mock()
         with (
-            patch.dict(scope, {"repo_root": lambda: self.base}),
+            patch.dict(scope, {
+                "repo_root": lambda: self.base,
+                "git_policy": lambda _root: "direct",
+                "rondo_session_name": lambda _root, _custom=None: "rondo-anywhere",
+                "zellij_sessions": lambda: (set(), set()),
+                "installed": lambda _name: True,
+                "write_layout": lambda _panels: self.base / "layout.kdl",
+                "schedule_agents_focus": schedule_focus,
+            }),
             patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["os"], "chdir") as chdir,
+            patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
         ):
-            with self.assertRaisesRegex(RuntimeError, "Git"):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
                 rondo["open_session"]()
+
+        chdir.assert_called_once_with(self.base)
+        schedule_focus.assert_called_once_with("rondo-anywhere")
+        execvp.assert_called_once_with(
+            "zellij", ["zellij", "-s", "rondo-anywhere", "-n", str(self.base / "layout.kdl")]
+        )
+
+    def test_active_session_schedules_agents_focus_after_attach(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        rondo["write_setting"]("panels", "claude")
+        scope = rondo["open_session"].__globals__
+        schedule_focus = unittest.mock.Mock()
+        with (
+            patch.dict(scope, {
+                "repo_root": lambda: self.base,
+                "git_policy": lambda _root: "direct",
+                "rondo_session_name": lambda _root, _custom=None: "rondo-active",
+                "zellij_sessions": lambda: ({"rondo-active"}, set()),
+                "installed": lambda _name: True,
+                "repair_active_session": lambda *_args: [],
+                "schedule_agents_focus": schedule_focus,
+            }),
+            patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
+            patch.object(scope["os"], "chdir"),
+            patch.object(scope["os"], "execvp", side_effect=RuntimeError("stop")) as execvp,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                rondo["open_session"]()
+
+        schedule_focus.assert_called_once_with("rondo-active")
+        execvp.assert_called_once_with("zellij", ["zellij", "attach", "rondo-active"])
 
     def test_missing_configured_agent_is_skipped(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -1087,6 +1174,7 @@ class RondoTests(unittest.TestCase):
                 "zellij_sessions": lambda: (set(), set()),
                 "installed": lambda name: name == "claude",
                 "write_layout": lambda panels: layouts.append(panels) or self.base / "layout.kdl",
+                "schedule_agents_focus": lambda _name: None,
             }),
             patch.object(scope["shutil"], "which", return_value="/bin/zellij"),
             patch.object(scope["os"], "chdir"),

@@ -31,7 +31,7 @@ Rondo is local-first. It reads the files that each installed CLI already stores 
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.2/install.sh | sh
 ```
 
 Python 3.10+ is the only runtime requirement. The installer downloads a fixed Rondo release and Zellij 0.44.3, verifies SHA-256, creates the commands in `~/.local/bin`, and adds that directory to your shell `PATH`.
@@ -41,7 +41,7 @@ Python 3.10+ is the only runtime requirement. The installer downloads a fixed Ro
 Open PowerShell and run:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.1/install.ps1))) -Version v0.14.1
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.2/install.ps1))) -Version v0.14.2
 ```
 
 The Windows installer downloads Rondo and native Zellij. If Python 3.10+ is missing, it installs Python through WinGet. WSL is not required. You can run `rondo` immediately in the same PowerShell that ran the installer. If another terminal cannot find the command, close all terminal windows and reopen one.
@@ -54,7 +54,7 @@ Then run this once inside the Git repository you want to work on:
 rondo
 ```
 
-Only the first run asks for language, explanation level, approval mode, agents, and relay behavior, then opens the panes immediately. Later runs attach directly to the same repository workspace. Run `rondo setup` only when you want to change the saved choices.
+Only the first run asks for language, explanation level, approval mode, agents, and relay behavior. After that, running `rondo` from any folder opens that location directly in the `agents` dashboard. Run `rondo setup` only when you want to change the saved choices.
 
 To link an existing clone for development, run `sh install.sh` on macOS/Linux or `.\install.ps1` in PowerShell. That mode points directly at source files and is intentionally outside the managed update/rollback lifecycle. Use `rondo update` and `rondo rollback` for a version installed by the one-line command.
 

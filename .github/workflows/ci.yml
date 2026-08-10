@@ -62,3 +62,6 @@ jobs:
       - name: Windows Zellij lifecycle
         shell: pwsh
         run: ./tests/zellij_windows_smoke.ps1
+      - name: Windows Rondo anywhere entry
+        shell: pwsh
+        run: ./tests/rondo_windows_entry_smoke.ps1
