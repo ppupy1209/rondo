@@ -34,6 +34,20 @@ def database_path(root: Path) -> Path:
     return journal_home(root) / "state.db"
 
 
+def clear_events(root: Path) -> int:
+    """Remove journal events while preserving approved scheduled jobs."""
+    connection = _connect(root)
+    try:
+        with connection:
+            count = int(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+            connection.execute("DELETE FROM events")
+        return count
+    except sqlite3.Error as error:
+        raise JournalError("busy") from error
+    finally:
+        connection.close()
+
+
 def _private(path: Path) -> None:
     try:
         os.chmod(path, 0o600)

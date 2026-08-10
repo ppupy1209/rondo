@@ -31,7 +31,7 @@ Rondo는 Claude Code, Codex, Gemini, Kimi, Grok을 하나의 영속적인 터미
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.0/install.sh | sh
 ```
 
 필요한 런타임은 Python 3.10 이상뿐입니다. 설치 프로그램은 고정된 Rondo 릴리스와 Zellij 0.44.3을 내려받아 SHA-256을 확인하고, `~/.local/bin`에 명령을 만든 뒤 셸 `PATH`까지 등록합니다.
@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.sh 
 PowerShell을 열고 다음 한 줄을 실행합니다.
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.ps1))) -Version v0.13.1
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.0/install.ps1))) -Version v0.14.0
 ```
 
 Windows 설치 프로그램이 Rondo와 네이티브 Zellij를 내려받습니다. Python 3.10 이상이 없으면 WinGet으로 Python도 설치합니다. WSL은 필요하지 않습니다. 설치 명령을 실행한 같은 PowerShell에서 바로 `rondo`를 실행할 수 있습니다. 다른 터미널에서 명령을 찾지 못하면 열려 있는 터미널 창을 모두 닫고 다시 여세요.
@@ -70,7 +70,8 @@ rondo status      # 현재 상태와 다음 권장 작업을 한 번에 확인
 rondo setup       # 저장된 언어·설명·승인·에이전트·인계 설정 변경
 rondo audience    # 모든 에이전트의 결과 설명 수준 변경
 rondo add         # 에이전트를 선택해 패널 추가
-rondo open . ../api ../web  # 여러 디렉터리를 한 터미널의 병렬 탭으로 열기
+rondo open . ../api ../web  # 여러 디렉터리를 한 터미널의 병렬 셸 탭으로 열기
+rondo open --agents ../api ../web  # 디렉터리마다 선택한 에이전트 패널 열기
 rondo send codex "현재 diff를 검토해 주세요"  # Codex 패널에 입력하고 전송
 rondo learn pending  # 에이전트와 사용자가 제안한 프로젝트 지식 검토
 rondo recall "인증"  # 승인 지식·작업 이력·최근 Git 커밋 검색
@@ -138,9 +139,10 @@ rondo support-bundle          # 원문 없는 비공개 진단 zip 생성
 
 ```powershell
 rondo open C:\work\api C:\work\web C:\work\worker
+rondo open --agents C:\work\api C:\work\web
 ```
 
-Rondo 바깥에서 실행하면 모든 디렉터리를 담은 영속 세션을 만들거나 기존 세션에 다시 붙습니다. 이미 Rondo 안이라면 현재 터미널에 새 탭을 추가합니다. 각 탭의 프로세스는 독립적으로 계속 실행되며 `Ctrl+t` 다음 `←`/`→`로 디렉터리 사이를 이동합니다. 같은 이름의 디렉터리도 경로별 고유 탭 이름으로 구분합니다.
+기본 명령은 디렉터리마다 독립 셸 탭을 엽니다. `--agents`를 붙이면 setup에서 고른 에이전트 패널을 각 디렉터리 탭에 함께 띄워 여러 프로젝트를 한 터미널에서 병렬로 진행할 수 있습니다. Rondo 바깥에서 실행하면 모든 디렉터리를 담은 영속 세션을 만들거나 기존 세션에 다시 붙고, 이미 Rondo 안이라면 현재 터미널에 새 탭을 추가합니다. 각 탭의 프로세스는 독립적으로 계속 실행되며 `Ctrl+t` 다음 `←`/`→`로 디렉터리 사이를 이동합니다. 같은 이름의 디렉터리도 경로별 고유 탭 이름으로 구분합니다.
 
 ## 사용자 수준에 맞춘 설명
 
@@ -210,7 +212,9 @@ rondo recall --id a1b2c3d4          # 절차 원문을 ID로 불러오기
 
 승인·거절·삭제는 대화형 사용자 터미널에서만 가능하며, Rondo 안에서는 현재 프로세스가 `shell` 탭에 있는지도 확인합니다. 에이전트 패널, race 탭, 파이프·스크립트 실행에서는 거부합니다. 제안은 2,000자, 승인 기억은 총 4,000자, 절차는 16개로 제한하고, 일반적인 비밀값·프롬프트 주입·파괴 명령 패턴과 보이지 않는 제어 문자를 저장 전에 차단합니다. 여러 에이전트의 동시 쓰기는 저장소별 잠금으로 직렬화하며, 손상되거나 심볼릭 링크로 바뀐 상태 파일은 사용하지 않습니다.
 
-검색 이력에는 Rondo가 만든 짧은 작업 이벤트와 Git 커밋 제목만 들어가며 Claude·Codex·Gemini 대화 원문을 수집하지 않습니다. 데이터는 네트워크 서비스 없이 `~/.cache/rondo/knowledge/`와 `~/.cache/rondo/journal/`에 비공개 권한으로 저장됩니다. 같은 운영체제 사용자 권한을 이미 가진 악성 프로세스를 격리하는 비밀 저장소는 아니므로 토큰·비밀번호 같은 민감정보는 기록하지 마세요.
+검색 이력에는 Rondo가 만든 짧은 작업 이벤트와 Git 커밋 제목만 들어가며 Claude·Codex·Gemini 대화 원문을 수집하지 않습니다. `rondo send` 메시지와 task·race·예약 프롬프트 원문도 자동 작업 이력에는 남기지 않고 전달·시작·완료 같은 메타데이터만 기록합니다. `rondo note`로 직접 남긴 내용, 실행에 필요한 task·Proof 상태, 인계 파일, 승인된 예약 작업 원문은 각 기능의 로컬 상태에 보관되며 예약 작업은 삭제할 때까지 유지됩니다.
+
+자동 기록은 `rondo history off`로 끄고 `rondo history on`으로 다시 켤 수 있습니다. `rondo history clear`는 작업 이벤트만 삭제하며 승인된 기억·절차와 예약 작업은 보존합니다. 일회 실행에서는 `RONDO_HISTORY=off`도 사용할 수 있습니다. 데이터는 네트워크 서비스 없이 `~/.cache/rondo/knowledge/`와 `~/.cache/rondo/journal/`에 비공개 권한으로 저장됩니다. 같은 운영체제 사용자 권한을 이미 가진 악성 프로세스를 격리하는 비밀 저장소는 아니므로 토큰·비밀번호 같은 민감정보는 기록하지 마세요.
 
 ## 학습 루프·작업 저널·예약 작업
 
@@ -222,6 +226,9 @@ rondo recall --id a1b2c3d4          # 절차 원문을 ID로 불러오기
 rondo note "로그인 회귀 테스트 통과" --ref tests/auth_test.py
 rondo history "로그인"       # 결과·위임·검증 이력 검색
 rondo history --sessions     # 공급자와 무관한 Rondo 세션 타임라인
+rondo history status         # 자동 이력 저장 여부 확인
+rondo history off            # 자동 이벤트 저장 중지
+rondo history clear          # 기존 작업 이벤트 삭제
 
 rondo schedule add "CI 실패 원인을 확인해줘" --agent codex --every 2h
 rondo schedule add "릴리스 체크를 실행해줘" --agent claude --at 2026-08-10T09:00:00+09:00
@@ -461,13 +468,14 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo setup` | 언어·설명 수준·승인·최대 4개 패널·인계 모드 변경 |
 | `rondo audience [default\|nondev\|guided]` | 모든 에이전트의 결과 설명 수준 변경 |
 | `rondo add [agent]` | 패널 추가, 인자를 생략하면 선택 화면 표시 |
+| `rondo open [--shell\|--agents] <디렉터리...>` | 여러 디렉터리를 한 Zellij의 병렬 셸 또는 에이전트 탭으로 열기 |
 | `rondo send <agent> <message>` | 대상 패널에 보이는 요청을 입력하고 전송 |
 | `rondo task <목표> [옵션]` | 인수 조건·금지 조건·scope·검증 명령 기록 |
 | `rondo learn memory\|skill ...` | 저장소 기억·재사용 절차를 승인 대기로 제안 |
 | `rondo learn pending\|show\|approve\|reject\|remove` | 프로젝트 지식의 사용자 승인 수명주기 관리 |
 | `rondo recall [검색어\|--id ID]` | 승인 지식·작업 이벤트·최근 Git 이력 검색 |
 | `rondo note <요약> [--ref 참조]` | 비밀값을 가린 고신호 작업 결과를 저널에 기록 |
-| `rondo history [검색어\|--sessions]` | 저장소 작업 저널과 에이전트 세션 검색 |
+| `rondo history [검색어\|--sessions\|status\|on\|off\|clear]` | 저장소 작업 저널 검색·보존 설정·삭제 |
 | `rondo schedule [명령]` | 사용자 승인형 반복·일회 예약 작업 관리 |
 | `rondo proof [--reviewer 에이전트]` | 검증 실행 후 독립 검토 패킷 생성 |
 | `rondo review [--budget 2m]` | 시간 예산 안에서 고위험 사람 판단부터 표시 |
@@ -487,7 +495,7 @@ Rondo는 저장된 자격증명을 읽거나 벤더 API를 직접 호출하지 �
 | `rondo language` | 한국어 / English 변경 |
 | `rondo relay [off\|ready\|auto]` | 인계 전략 확인 / 변경 |
 | `rondo continue` | 대기 중인 인계를 기존 Codex 패널로 전달 |
-| `rondo doctor` | zellij·에이전트·설정 점검 |
+| `rondo doctor [--deep]` | zellij·에이전트·설정, 선택적으로 CLI 옵션과 GitHub 인증 점검 |
 | `rondo update [--check\|--version X]` | 검증된 관리형 릴리스 확인·설치 |
 | `rondo rollback` | 직전 관리형 설치로 한 번 되돌리기 |
 | `rondo uninstall [--purge]` | 프로그램 제거, 선택적으로 설정·캐시 제거 |
@@ -513,6 +521,7 @@ zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 �
   panels         선택한 에이전트 이름 (최대 4개)
   relay          off | ready | auto
   threshold      남은 사용량 임계치 (기본 1)
+  history        on | off
 
 ~/.cache/rondo/
   layout.kdl     생성된 zellij 레이아웃
@@ -533,13 +542,13 @@ zellij 안에서는 `Ctrl+p`+방향키로 패널 이동, `Ctrl+t`+방향키로 �
 ## 개발 및 검증
 
 ```sh
-python3 -m unittest discover -s tests -v
+PYTHONUTF8=1 python3 -m unittest discover -s tests -v
 python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
-python3 tests/zellij_smoke.py  # 실제 화면 전달·강제 재시작, macOS/Linux
+PYTHONUTF8=1 python3 tests/zellij_smoke.py  # 실제 화면 전달·강제 재시작, macOS/Linux
 ```
 
-GitHub Actions에서 macOS, Linux, Windows의 Python 테스트와 설치 smoke test를 실행하고, macOS·Linux에서는 실제 Zellij 화면 전달과 강제 재시작까지 검증합니다. `v*` 태그는 CLI 버전과 일치할 때만 macOS/Linux용 tar.gz, Windows용 zip, SHA-256 목록을 GitHub Release로 게시합니다.
+Windows PowerShell에서는 `$env:PYTHONUTF8=1`을 먼저 설정하고 같은 Python 명령을 실행합니다. GitHub Actions는 macOS·Linux·Windows에서 Python과 설치 프로그램을 검사하고 세 운영체제 모두에서 실제 Zellij 수명주기를 검증합니다. `v*` 태그는 CLI 버전이 일치할 때만 macOS/Linux tar.gz, Windows zip, SHA-256 목록과 GitHub 빌드 증명을 draft로 만든 뒤 한 번에 게시합니다. 내려받은 파일은 `gh attestation verify <파일> --repo ppupy1209/rondo`로 추가 검증할 수 있습니다.
 
 ### 내부 문서
 
@@ -547,8 +556,10 @@ GitHub Actions에서 macOS, Linux, Windows의 Python 테스트와 설치 smoke t
 - [rondo race](docs/race.md) — 같은 과제를 여러 에이전트에게 시키고 하나를 고르는 흐름
 - [실사용 감사 · 2026-08-09](docs/audit-2026-08-09.md) — 0.7.0 전체 명령 실행 결과와 개선 항목
 - [0.12 외부 베타](docs/beta.md) — 텔레메트리 없는 실제 사용자 검증 기준
-- [보안 정책](SECURITY.md) · [변경 이력](CHANGELOG.md) · [기여 방법](CONTRIBUTING.md)
+- [보안 정책](SECURITY.md) · [제3자 고지](THIRD_PARTY_NOTICES.md) · [변경 이력](CHANGELOG.md) · [기여 방법](CONTRIBUTING.md)
 
 ## 라이선스
 
 MIT
+
+Rondo는 독립 프로젝트이며 Zellij, OpenAI, Anthropic, Google, Moonshot AI, xAI 또는 각 계열사의 보증·제휴를 받지 않습니다. 제품명과 상표는 각 소유자에게 있습니다. 번들 설치되는 Zellij의 저작권·라이선스는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인하세요.

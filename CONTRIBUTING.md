@@ -9,12 +9,14 @@ Rondo는 의존성을 늘리기보다 Python 표준 라이브러리와 각 CLI�
 3. 아래 검증을 실행합니다.
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+PYTHONUTF8=1 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 sh -n install.sh bin/ai bin/rondo-status bin/claude-statusline bin/*-session bin/handoff
-python3 tests/zellij_smoke.py  # zellij가 설치된 macOS/Linux
+PYTHONUTF8=1 python3 tests/zellij_smoke.py  # zellij가 설치된 macOS/Linux
 ```
 
-Windows 설치 변경은 GitHub Actions의 Windows job까지 확인합니다. 새 다운로드는 고정 버전, 해시 검증, 안전한 임시 경로, 실패 시 복구를 갖춰야 합니다.
+Windows PowerShell에서는 `$env:PYTHONUTF8=1`을 먼저 설정하고 `python -m unittest discover -s tests -v`와 `./tests/zellij_windows_smoke.ps1`을 실행합니다. Windows 설치 변경은 GitHub Actions의 Windows job까지 확인합니다. 새 다운로드는 고정 버전, 해시 검증, 안전한 임시 경로, 실패 시 복구를 갖춰야 합니다.
+
+이 저장소의 커밋 author·committer와 annotated tag tagger는 모두 `Yeonwoo Kim <ppupy1209@naver.com>`이어야 합니다. 처음 clone한 뒤 `git config user.name "Yeonwoo Kim"`, `git config user.email "ppupy1209@naver.com"`, `git config core.hooksPath .githooks`를 설정하세요. CI와 저장소 훅이 다른 신원을 거부합니다.
 
 ## Pull Request
 

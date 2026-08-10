@@ -31,7 +31,7 @@ Rondo is local-first. It reads the files that each installed CLI already stores 
 ### macOS / Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.0/install.sh | sh
 ```
 
 Python 3.10+ is the only runtime requirement. The installer downloads a fixed Rondo release and Zellij 0.44.3, verifies SHA-256, creates the commands in `~/.local/bin`, and adds that directory to your shell `PATH`.
@@ -41,7 +41,7 @@ Python 3.10+ is the only runtime requirement. The installer downloads a fixed Ro
 Open PowerShell and run:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.13.1/install.ps1))) -Version v0.13.1
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.14.0/install.ps1))) -Version v0.14.0
 ```
 
 The Windows installer downloads Rondo and native Zellij. If Python 3.10+ is missing, it installs Python through WinGet. WSL is not required. You can run `rondo` immediately in the same PowerShell that ran the installer. If another terminal cannot find the command, close all terminal windows and reopen one.
@@ -70,7 +70,8 @@ rondo status      # show current state and one recommended next action
 rondo setup       # change saved language, explanation, approval, agents, and relay
 rondo audience    # change how every agent explains its results
 rondo add         # select and add another agent pane
-rondo open . ../api ../web  # open directories as parallel tabs in one terminal
+rondo open . ../api ../web  # open directories as parallel shell tabs
+rondo open --agents ../api ../web  # open the selected agent panes in every directory
 rondo send codex "Review the current diff"  # type and submit in the Codex pane
 rondo learn pending  # review project knowledge proposed by users and agents
 rondo recall "authentication"  # search approved knowledge, work history, and Git
@@ -138,9 +139,10 @@ Run several projects or monorepo directories together as tabs in one Zellij sess
 
 ```powershell
 rondo open C:\work\api C:\work\web C:\work\worker
+rondo open --agents C:\work\api C:\work\web
 ```
 
-Outside Rondo, this creates or reattaches to one persistent session containing every directory. Inside Rondo, it adds tabs to the current terminal. Processes in each tab keep running independently; press `Ctrl+t`, then `←` or `→`, to move between directories. Directories with the same base name receive distinct path-based tab names.
+The default command creates one independent shell tab per directory. Add `--agents` to launch the agents selected during setup in every directory tab, so several projects can progress in parallel inside one terminal. Outside Rondo, this creates or reattaches to one persistent session containing every directory. Inside Rondo, it adds tabs to the current terminal. Processes in each tab keep running independently; press `Ctrl+t`, then `←` or `→`, to move between directories. Directories with the same base name receive distinct path-based tab names.
 
 ## Audience-aware explanations
 
@@ -210,7 +212,9 @@ Approved `memory` entries are shared with new agent sessions under a strict size
 
 Approval, rejection, and removal require an interactive user terminal. Inside Rondo, the process must also be running in the `shell` tab. Agent panes, race tabs, pipes, and scripts are rejected. Each proposal is limited to 2,000 characters, approved memory to 4,000 characters total, and procedures to 16. Common secret, prompt-injection, and destructive-command patterns plus invisible control characters are rejected before storage. Concurrent agent writes are serialized by a repository lock, and corrupt or symbolic-link state files fail closed.
 
-History contains only short Rondo operation events and Git commit subjects; Rondo does not ingest raw Claude, Codex, or Gemini transcripts. Everything stays private under `~/.cache/rondo/knowledge/` and `~/.cache/rondo/journal/` without a network service. This is not a secret vault against a malicious process that already has the same operating-system user privileges, so never record tokens or passwords.
+History contains only short Rondo operation events and Git commit subjects; Rondo does not ingest raw Claude, Codex, or Gemini transcripts. Automatic history never stores the text passed to `rondo send` or task, race, and scheduled prompts; it records metadata such as delivery, start, and completion. Explicit `rondo note` content, task and Proof state, handoff files, and approved scheduled prompts remain in their feature-specific local state. Scheduled prompts remain until the job is removed.
+
+Use `rondo history off` to stop automatic events, `rondo history on` to resume them, and `rondo history clear` to delete existing work events while preserving approved knowledge and scheduled jobs. `RONDO_HISTORY=off` provides a one-process override. Everything stays private under `~/.cache/rondo/knowledge/` and `~/.cache/rondo/journal/` without a network service. This is not a secret vault against a malicious process that already has the same operating-system user privileges, so never record tokens or passwords.
 
 ## Learning loop, work journal, and scheduled work
 
@@ -222,6 +226,9 @@ The repository-scoped work journal stores up to 5,000 structured events in SQLit
 rondo note "Login regression tests passed" --ref tests/auth_test.py
 rondo history "login"        # search outcomes, delegation, and verification
 rondo history --sessions     # provider-neutral Rondo session timeline
+rondo history status         # inspect automatic retention
+rondo history off            # stop automatic event storage
+rondo history clear          # delete existing work events
 
 rondo schedule add "Inspect CI failures" --agent codex --every 2h
 rondo schedule add "Run the release checks" --agent claude --at 2026-08-10T09:00:00+09:00
@@ -461,13 +468,14 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo setup` | Change language, explanation, approval, up to four panes, and relay |
 | `rondo audience [default\|nondev\|guided]` | Change how every agent explains its results |
 | `rondo add [agent]` | Add an agent pane; omit the name to select interactively |
+| `rondo open [--shell\|--agents] <directories...>` | Open parallel shell or agent tabs in one Zellij session |
 | `rondo send <agent> <message>` | Type and submit a visible prompt in that agent's pane |
 | `rondo task <goal> [options]` | Record acceptance criteria, boundaries, scope, and checks |
 | `rondo learn memory\|skill ...` | Propose repository memory or a reusable procedure for approval |
 | `rondo learn pending\|show\|approve\|reject\|remove` | Manage the human-approved knowledge lifecycle |
 | `rondo recall [query\|--id ID]` | Search approved knowledge, operation events, and recent Git history |
 | `rondo note <summary> [--ref reference]` | Record a secret-redacted, high-signal work outcome |
-| `rondo history [query\|--sessions]` | Search the repository work journal and agent sessions |
+| `rondo history [query\|--sessions\|status\|on\|off\|clear]` | Search, configure, or clear repository work history |
 | `rondo schedule [command]` | Manage human-approved recurring and one-shot work |
 | `rondo proof [--reviewer agent]` | Run checks and build an independent review packet |
 | `rondo review [--budget 2m]` | Show the highest-risk human decisions within a time budget |
@@ -487,7 +495,7 @@ Rondo never reads saved credentials or calls a vendor API directly. Gemini's own
 | `rondo language` | Switch Korean / English |
 | `rondo relay [off\|ready\|auto]` | Inspect or change the continuity strategy |
 | `rondo continue` | Send the pending handoff to the existing Codex pane |
-| `rondo doctor` | Check zellij, agents, and configuration |
+| `rondo doctor [--deep]` | Check zellij, agents, configuration, CLI flags, and GitHub auth |
 | `rondo update [--check\|--version X]` | Check or install a verified managed release |
 | `rondo rollback` | Restore the previous managed installation once |
 | `rondo uninstall [--purge]` | Remove the program and optionally settings/cache |
@@ -513,6 +521,7 @@ The target lookup order is `$HANDOFF_FILE`, `docs/collab/status.md`, then `docs/
   panels         selected agent names (up to four)
   relay          off | ready | auto
   threshold      remaining percentage (default: 1)
+  history        on | off
 
 ~/.cache/rondo/
   layout.kdl     generated zellij layout
@@ -533,13 +542,13 @@ No telemetry is included. Rondo does not store credentials or ingest raw agent t
 ## Development
 
 ```sh
-python3 -m unittest discover -s tests -v
+PYTHONUTF8=1 python3 -m unittest discover -s tests -v
 python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
 sh -n install.sh bin/ai bin/rondo-status bin/*-session
-python3 tests/zellij_smoke.py  # real visible delivery and forced restart on macOS/Linux
+PYTHONUTF8=1 python3 tests/zellij_smoke.py  # real visible delivery and forced restart on macOS/Linux
 ```
 
-GitHub Actions runs the Python suite and installer smoke tests on macOS, Linux, and Windows, plus real Zellij delivery and forced restart on macOS/Linux. A `v*` tag publishes macOS/Linux tar.gz, Windows zip, and SHA-256 assets only when the tag matches the CLI version.
+In Windows PowerShell, set `$env:PYTHONUTF8=1` before running the same Python commands. GitHub Actions checks Python and installers on macOS, Linux, and Windows and exercises the real Zellij lifecycle on all three. A `v*` tag publishes macOS/Linux tar.gz, Windows zip, SHA-256 assets, and GitHub build attestations through a draft-first release only when the tag matches the CLI version. Verify a downloaded file with `gh attestation verify <file> --repo ppupy1209/rondo`.
 
 ### Internal notes
 
@@ -547,8 +556,10 @@ GitHub Actions runs the Python suite and installer smoke tests on macOS, Linux, 
 - [rondo race](docs/race.md) — one task, several agents, one human pick
 - [Hands-on audit · 2026-08-09](docs/audit-2026-08-09.md) — every command exercised on 0.7.0, with findings (Korean)
 - [0.12 external beta](docs/beta.md) — opt-in validation without telemetry (Korean)
-- [Security policy](SECURITY.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ## License
 
 MIT
+
+Rondo is an independent project and is not affiliated with or endorsed by Zellij, OpenAI, Anthropic, Google, Moonshot AI, xAI, or their affiliates. Product names and trademarks belong to their owners. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the copyright and license of the installed Zellij binary.

@@ -2,19 +2,21 @@
 """Real Zellij delivery and restart smoke test; run explicitly in CI."""
 from __future__ import annotations
 
-import fcntl
 import json
 import os
-import pty
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
-import termios
 import time
 import uuid
 from pathlib import Path
+
+if os.name != "nt":
+    import fcntl
+    import pty
+    import struct
+    import termios
 
 ROOT = Path(__file__).resolve().parents[1]
 RONDO = ROOT / "bin" / "rondo"

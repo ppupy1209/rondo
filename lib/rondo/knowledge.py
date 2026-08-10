@@ -447,6 +447,16 @@ def record(root: Path, kind: str, summary: str, reference: str = "") -> None:
         _save(root, state)
 
 
+def clear_events(root: Path) -> int:
+    """Remove automatic operation events without deleting approved knowledge."""
+    with _locked(root):
+        state = load(root)
+        count = len(state["events"])
+        state["events"] = []
+        _save(root, state)
+    return count
+
+
 def _commit_events(root: Path) -> list[dict]:
     rows = git(root, "log", "-100", "--format=%h%x1f%ct%x1f%s", check=False).splitlines()
     commits = []

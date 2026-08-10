@@ -30,7 +30,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.13.1"
+VERSION = "0.14.0"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -99,7 +99,7 @@ TEXT = {
                         승인된 기억·절차·작업 이력 검색
   rondo note "<요약>" [--ref 참조]
                         검색 가능한 고신호 작업 요약 기록
-  rondo history [검색어|--sessions]
+  rondo history [검색어|--sessions|status|on|off|clear]
                         저장소 작업 저널·에이전트 세션 검색
   rondo schedule [명령] 승인형 예약 작업 생성·관리
   rondo proof [--reviewer codex] [--no-checks]
@@ -201,6 +201,11 @@ TEXT = {
         "doctor_hint": "필수 항목을 설치한 뒤 `rondo setup`을 실행하세요.",
         "doctor_deep_title": "벤더 데이터 점검",
         "doctor_deep_hint": "`rondo doctor --deep`으로 벤더 데이터까지 점검합니다.",
+        "doctor_auth": "GitHub 인증",
+        "doctor_auth_ok": "로그인됨",
+        "doctor_auth_bad": "인증이 만료되었거나 없습니다 — `gh auth login`을 실행하세요",
+        "doctor_cli_contract": "CLI 실행 옵션",
+        "doctor_cli_changed": "필수 옵션을 찾지 못함: {flags}",
         "race_usage": "사용법: rondo race \"<과제>\" [--agents claude,codex] [--yes] | rondo race --status|--send|--abort",
         "race_none": "참가할 에이전트가 없습니다. 한도가 남은 에이전트가 없거나 설치되지 않았습니다.",
         "race_plan": "race 참가자",
@@ -327,10 +332,16 @@ TEXT = {
         "recall_empty": "일치하는 승인 지식이나 작업 이력이 없습니다.",
         "note_usage": "사용법: rondo note \"<작업 요약>\" [--ref 참조]",
         "note_saved": "작업 저널에 기록했습니다: {id}",
-        "history_usage": "사용법: rondo history [검색어|--id ID|--sessions]",
+        "history_usage": "사용법: rondo history [검색어|--id ID|--sessions|status|on|off|clear [--yes]]",
         "history_title": "Rondo 작업 저널",
         "history_sessions": "Rondo 에이전트 세션",
         "history_empty": "기록된 작업 이력이 없습니다.",
+        "history_state": "자동 작업 이력: {state}",
+        "history_on": "켜짐",
+        "history_off": "꺼짐",
+        "history_changed": "자동 작업 이력을 {state} 상태로 바꿨습니다.",
+        "history_clear_confirm": "작업 이력만 삭제할까요? 승인된 지식과 예약 작업은 유지됩니다. [y/N] ",
+        "history_cleared": "작업 이력 {count}개를 삭제했습니다.",
         "schedule_usage": "사용법: rondo schedule add \"<작업>\" --agent <이름> (--every 1h|--at ISO|--cron \"0 9 * * 1-5\") | list | approve|reject|pause|resume|run|remove <ID> | tick",
         "schedule_title": "Rondo 예약 작업",
         "schedule_empty": "예약 작업이 없습니다.",
@@ -455,10 +466,13 @@ TEXT = {
         "session_current": "현재 프로젝트",
         "session_killed": "Rondo 세션을 종료했습니다: {name}",
         "kill_usage": "사용법: rondo kill [rondo-세션명]",
-        "open_usage": "사용법: rondo open <디렉터리> [디렉터리...]",
+        "open_usage": "사용법: rondo open [--shell|--agents] <디렉터리> [디렉터리...]",
         "open_not_directory": "디렉터리를 찾을 수 없습니다: {path}",
         "open_too_many": "한 번에 최대 {max}개 디렉터리를 열 수 있습니다.",
-        "open_started": "디렉터리 {count}개를 병렬 탭으로 열었습니다.",
+        "open_started": "디렉터리 {count}개를 병렬 탭으로 열었습니다 ({mode}).",
+        "open_shell_mode": "셸",
+        "open_agent_mode": "에이전트 작업공간",
+        "session_repaired": "종료되거나 사라진 에이전트 패널을 복구했습니다: {names}",
         "cache_cleaned": "사용하지 않는 로컬 캐시 {count}개를 정리했습니다.",
     },
     "en": {
@@ -486,7 +500,7 @@ TEXT = {
                         Search approved memory, procedures, and work history
   rondo note "<summary>" [--ref reference]
                         Record a high-signal searchable work summary
-  rondo history [query|--sessions]
+  rondo history [query|--sessions|status|on|off|clear]
                         Search the repository work journal and agent sessions
   rondo schedule [command]
                         Create and manage human-approved scheduled work
@@ -590,6 +604,11 @@ Inside a session
         "doctor_hint": "Install required items, then run `rondo setup`.",
         "doctor_deep_title": "Vendor data probe",
         "doctor_deep_hint": "Run `rondo doctor --deep` to probe vendor data too.",
+        "doctor_auth": "GitHub auth",
+        "doctor_auth_ok": "authenticated",
+        "doctor_auth_bad": "missing or expired — run `gh auth login`",
+        "doctor_cli_contract": "CLI launch flags",
+        "doctor_cli_changed": "required option(s) missing: {flags}",
         "race_usage": "Usage: rondo race \"<task>\" [--agents claude,codex] [--yes] | rondo race --status|--send|--abort",
         "race_none": "No agent can join. None has quota left, or none is installed.",
         "race_plan": "Race participants",
@@ -716,10 +735,16 @@ Inside a session
         "recall_empty": "No approved knowledge or work history matched.",
         "note_usage": "Usage: rondo note \"<work summary>\" [--ref reference]",
         "note_saved": "Recorded work journal entry: {id}",
-        "history_usage": "Usage: rondo history [query|--id ID|--sessions]",
+        "history_usage": "Usage: rondo history [query|--id ID|--sessions|status|on|off|clear [--yes]]",
         "history_title": "Rondo work journal",
         "history_sessions": "Rondo agent sessions",
         "history_empty": "No work history has been recorded.",
+        "history_state": "Automatic work history: {state}",
+        "history_on": "on",
+        "history_off": "off",
+        "history_changed": "Automatic work history is now {state}.",
+        "history_clear_confirm": "Delete work history only? Approved knowledge and scheduled jobs are kept. [y/N] ",
+        "history_cleared": "Deleted {count} work history event(s).",
         "schedule_usage": "Usage: rondo schedule add \"<task>\" --agent <name> (--every 1h|--at ISO|--cron \"0 9 * * 1-5\") | list | approve|reject|pause|resume|run|remove <ID> | tick",
         "schedule_title": "Rondo scheduled work",
         "schedule_empty": "No scheduled work exists.",
@@ -844,10 +869,13 @@ Inside a session
         "session_current": "current project",
         "session_killed": "Stopped Rondo session: {name}",
         "kill_usage": "Usage: rondo kill [rondo-session-name]",
-        "open_usage": "Usage: rondo open <directory> [directory...]",
+        "open_usage": "Usage: rondo open [--shell|--agents] <directory> [directory...]",
         "open_not_directory": "Directory not found: {path}",
         "open_too_many": "Open at most {max} directories at once.",
-        "open_started": "Opened {count} directories as parallel tabs.",
+        "open_started": "Opened {count} directories as parallel tabs ({mode}).",
+        "open_shell_mode": "shells",
+        "open_agent_mode": "agent workspaces",
+        "session_repaired": "Recovered exited or missing agent panes: {names}",
         "cache_cleaned": "Removed {count} unused local cache item(s).",
     },
 }
@@ -1298,17 +1326,41 @@ def parallel_session_name(directories: list[Path]) -> str:
     return f"rondo-parallel-{label[:available]}-{digest}"
 
 
-def write_directory_layout(directories: list[Path], session_name: str) -> Path:
+def _directory_tab_lines(directory: Path, panels: list[str] | None = None) -> list[str]:
+    name = directory_tab_name(directory)
+    if not panels:
+        return [
+            f"    tab name={kdl_string(name)} {{",
+            f"        pane cwd={kdl_string(str(directory))}",
+            "    }",
+        ]
+    status = "rondo-status.cmd" if WINDOWS else "rondo-status"
+    lines = [
+        f"    tab name={kdl_string(name)} {{",
+        f"        pane name=\"status\" command={kdl_string(status)} cwd={kdl_string(str(directory))} size=1 borderless=true",
+        '        pane split_direction="vertical" {',
+    ]
+    for index, panel in enumerate(panels):
+        size = ' size="50%"' if index == 0 and len(panels) > 1 else ""
+        lines.append(
+            f"            pane name={kdl_string(panel)} command={kdl_string(pane_command(panel))} "
+            f"cwd={kdl_string(str(directory))}{size}"
+        )
+    lines.extend(["        }", "    }"])
+    return lines
+
+
+def write_directory_layout(
+    directories: list[Path], session_name: str, panels: list[str] | None = None
+) -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     target = CACHE_DIR / f"{session_name}.kdl"
     lines = ["layout {"]
     for index, directory in enumerate(directories):
-        focus = " focus=true" if index == 0 else ""
-        lines.extend([
-            f"    tab name={kdl_string(directory_tab_name(directory))}{focus} {{",
-            f"        pane cwd={kdl_string(str(directory))}",
-            "    }",
-        ])
+        tab = _directory_tab_lines(directory, panels)
+        if index == 0:
+            tab[0] = tab[0].replace(" {", " focus=true {")
+        lines.extend(tab)
     lines.append("}")
     temp = target.with_suffix(".tmp")
     temp.write_text("\n".join(lines) + "\n")
@@ -1319,18 +1371,39 @@ def write_directory_layout(directories: list[Path], session_name: str) -> Path:
 def open_directories(values: list[str]) -> int:
     if shutil.which("zellij") is None:
         raise RuntimeError(t("not_installed", name="zellij"))
+    modes = [value for value in values if value in {"--shell", "--agents"}]
+    if len(modes) > 1 or any(value.startswith("--") and value not in modes for value in values):
+        raise RuntimeError(t("open_usage"))
+    agent_mode = modes == ["--agents"]
+    values = [value for value in values if value not in {"--shell", "--agents"}]
     directories = resolve_directories(values)
+    panels: list[str] | None = None
+    if agent_mode:
+        migrate_legacy_config()
+        if not (CONFIG_DIR / "panels").exists():
+            setup()
+        configured = configured_panels()
+        panels = [panel for panel in configured if installed(panel)]
+        if not panels:
+            raise RuntimeError(t("no_available_agents"))
+    mode = t("open_agent_mode" if agent_mode else "open_shell_mode")
     if in_zellij():
         for directory in directories:
-            subprocess.run(
-                [
-                    "zellij", "action", "new-tab",
-                    "--name", directory_tab_name(directory),
-                    "--cwd", str(directory),
-                ],
-                check=True,
-            )
-        print(t("open_started", count=len(directories)))
+            if panels:
+                layout = "\n".join(["layout {", *_directory_tab_lines(directory, panels), "}"])
+                subprocess.run(
+                    ["zellij", "action", "new-tab", "--layout-string", layout], check=True
+                )
+            else:
+                subprocess.run(
+                    [
+                        "zellij", "action", "new-tab",
+                        "--name", directory_tab_name(directory),
+                        "--cwd", str(directory),
+                    ],
+                    check=True,
+                )
+        print(t("open_started", count=len(directories), mode=mode))
         return 0
 
     name = parallel_session_name(directories)
@@ -1341,8 +1414,8 @@ def open_directories(values: list[str]) -> int:
         os.execvp(
             "zellij", ["zellij", "attach", "--force-run-commands", name]
         )
-    layout = write_directory_layout(directories, name)
-    print(t("open_started", count=len(directories)))
+    layout = write_directory_layout(directories, name, panels)
+    print(t("open_started", count=len(directories), mode=mode))
     os.execvp("zellij", ["zellij", "-s", name, "-n", str(layout)])
     return 0
 
@@ -1438,11 +1511,6 @@ def open_session(resume_agent: str | None = None, handoff: Path | None = None) -
     require_git_repo(root)
     os.environ["RONDO_GIT_POLICY"] = git_policy(root)
     name = rondo_session_name(root)
-    active, exited = zellij_sessions()
-    if name in active:
-        if resume_agent and handoff:
-            send_agent_message(resume_agent, [resume_prompt(handoff)], session_name=name)
-        os.execvp("zellij", ["zellij", "attach", name])
     if not (CONFIG_DIR / "panels").exists():
         setup()
     panels = configured_panels()
@@ -1452,6 +1520,14 @@ def open_session(resume_agent: str | None = None, handoff: Path | None = None) -
     panels = [name for name in panels if name not in unavailable]
     if not panels:
         raise RuntimeError(t("no_available_agents"))
+    active, exited = zellij_sessions()
+    if name in active:
+        repaired = repair_active_session(name, panels, root)
+        if repaired:
+            print(t("session_repaired", names=", ".join(repaired)))
+        if resume_agent and handoff:
+            send_agent_message(resume_agent, [resume_prompt(handoff)], session_name=name)
+        os.execvp("zellij", ["zellij", "attach", name])
     layout = write_layout(panels)
     print(f"{t('panels')}: {' '.join(panels)}")
     os.chdir(root)
@@ -1511,6 +1587,43 @@ def agent_panes(session_name: str | None = None) -> dict[str, str]:
             if title in AGENTS:
                 found[title] = str(pane["id"])
     return found
+
+
+def repair_active_session(session_name: str, panels: list[str], root: Path) -> list[str]:
+    """Recreate configured panes that exited while a Zellij session stayed alive."""
+    command = ["zellij", "-s", session_name]
+    result = subprocess.run(
+        command + ["action", "list-panes", "--json"],
+        capture_output=True, text=True, check=True, timeout=10,
+    )
+    try:
+        panes = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        raise RuntimeError(t("pane_lookup_failed")) from None
+    states = {
+        str(pane.get("title", "")).casefold(): pane
+        for pane in panes
+        if pane.get("tab_name") == "agents" and not pane.get("is_plugin")
+    }
+    missing = [panel for panel in panels if panel not in states or states[panel].get("exited")]
+    if not missing:
+        return []
+    subprocess.run(command + ["action", "go-to-tab-name", "agents"], check=False)
+    subprocess.run(command + ["action", "move-focus", "down"], check=False)
+    for panel in missing:
+        old = states.get(panel)
+        if old and old.get("exited"):
+            subprocess.run(
+                command + ["action", "close-pane", "--pane-id", str(old["id"])], check=False
+            )
+        subprocess.run(
+            command + [
+                "action", "new-pane", "--name", panel, "--cwd", str(root),
+                "--", pane_command(panel),
+            ],
+            check=True,
+        )
+    return missing
 
 
 def find_agent_pane(name: str, session_name: str | None = None) -> str:
@@ -1605,7 +1718,7 @@ def send_agent_message(
         command += ["-s", session_name]
     _send_to_pane(name, pane, message, command)
     record_journal(
-        Path.cwd(), "prompt", message, f"agent:{name}", agent=name,
+        Path.cwd(), "prompt", "message delivered", f"agent:{name}", agent=name,
         session=session_name or os.environ.get("ZELLIJ_SESSION_NAME", ""),
     )
     print(t("sent", name=name))
@@ -1754,7 +1867,7 @@ def handoff_command(parts: list[str]) -> int:
     temp.replace(target)
     panels = read_setting("panels").split()
     suggested = next((name for name in panels if name in ("claude", "codex")), "codex")
-    record_event(root, "handoff", note, str(target))
+    record_event(root, "handoff", "handoff updated", str(target))
     print(t("handoff_saved", path=target.relative_to(root), agent=suggested))
     return 0
 
@@ -1838,7 +1951,7 @@ def task_command(args: list[str]) -> int:
         acceptance=len(task["acceptance"]),
         must_not=len(task["must_not"]),
     ))
-    record_event(root, "task", task["goal"])
+    record_event(root, "task", "task contract recorded")
     return 0
 
 
@@ -1880,6 +1993,8 @@ def record_journal(
     root: Path, kind: str, summary: str, reference: str = "",
     agent: str = "", session: str = "",
 ) -> dict | None:
+    if not history_enabled():
+        return None
     journal_lib = _journal_library()
     try:
         return journal_lib.record(
@@ -1893,6 +2008,8 @@ def record_journal(
 
 
 def record_event(root: Path, kind: str, summary: str, reference: str = "") -> None:
+    if not history_enabled():
+        return
     from rondo import knowledge as knowledge_lib
 
     try:
@@ -1900,6 +2017,15 @@ def record_event(root: Path, kind: str, summary: str, reference: str = "") -> No
     except (knowledge_lib.KnowledgeError, OSError):
         pass
     record_journal(root, kind, summary, reference)
+
+
+def history_enabled() -> bool:
+    forced = os.environ.get("RONDO_HISTORY", "").strip().casefold()
+    if forced in {"0", "off", "false", "no"}:
+        return False
+    if forced in {"1", "on", "true", "yes"}:
+        return True
+    return read_setting("history", "on").casefold() != "off"
 
 
 def _knowledge_require_user_terminal() -> None:
@@ -2150,6 +2276,25 @@ def history_command(args: list[str]) -> int:
     root = repo_root()
     require_git_repo(root)
     try:
+        if args == ["status"]:
+            state = t("history_on" if history_enabled() else "history_off")
+            print(t("history_state", state=state))
+            return 0
+        if args in (["on"], ["off"]):
+            _knowledge_require_user_terminal()
+            enabled = args[0] == "on"
+            write_setting("history", "on" if enabled else "off")
+            print(t("history_changed", state=t("history_on" if enabled else "history_off")))
+            return 0
+        if args in (["clear"], ["clear", "--yes"]):
+            _knowledge_require_user_terminal()
+            if "--yes" not in args and input(t("history_clear_confirm")).strip().casefold() not in {"y", "yes"}:
+                print(t("race_cancelled"))
+                return 0
+            from rondo import knowledge as knowledge_lib
+            count = journal_lib.clear_events(root) + knowledge_lib.clear_events(root)
+            print(t("history_cleared", count=count))
+            return 0
         if args == ["--sessions"]:
             rows = journal_lib.sessions(root)
             print(t("history_sessions"))
@@ -2251,7 +2396,7 @@ def schedule_tick(quiet: bool = False) -> int:
                 root, item["id"], True, lease_until=item["lease_until"]
             )
             record_journal(
-                root, "schedule", f"delivered: {item['prompt']}",
+                root, "schedule", "scheduled message delivered",
                 f"job:{item['id']}", agent=item["agent"],
             )
             if not quiet:
@@ -2306,7 +2451,7 @@ def _schedule_add(args: list[str]) -> int:
         if _knowledge_confirm(t("schedule_confirm_approve"), checked=True):
             item = journal_lib.job_action(root, item["id"], "approve", actor="human")
             record_journal(
-                root, "schedule", f"approved: {item['prompt']}",
+                root, "schedule", "scheduled job approved",
                 f"job:{item['id']}", agent=item["agent"],
             )
             print(t("schedule_approved", id=item["id"]))
@@ -2353,7 +2498,7 @@ def schedule_command(args: list[str]) -> int:
             }[action]
             print(t(message, id=result["id"]))
             record_journal(
-                root, "schedule", f"{action}: {item['prompt']}",
+                root, "schedule", f"scheduled job {action}",
                 f"job:{item['id']}", agent=item["agent"],
             )
             if action == "run" and in_zellij():
@@ -2984,12 +3129,67 @@ def doctor(deep: bool = False) -> int:
         failed = failed or (is_required and not path)
     panels = read_setting("panels")
     print(f"  {'✓' if panels else '–'} {t('doctor_config'):<10} {panels or t('doctor_missing')}")
-    regressed = deep_probe() if deep else False
+    regressed = False
+    if deep:
+        regressed = deep_probe()
+        regressed = cli_contract_probe() or regressed
+        regressed = github_auth_probe() or regressed
     if not deep:
         print(t("doctor_deep_hint"))
     if failed:
         print(t("doctor_hint"))
     return int(failed or regressed)
+
+
+def _help_command(executable: str) -> list[str]:
+    if WINDOWS and Path(executable).suffix.casefold() in {".cmd", ".bat"}:
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", executable, "--help"]
+    return [executable, "--help"]
+
+
+def cli_contract_probe() -> bool:
+    contracts = {
+        "claude": ("--permission-mode",),
+        "codex": ("--sandbox", "--ask-for-approval"),
+        "gemini": ("--mode",),
+    }
+    print(f"\n{t('doctor_cli_contract')}")
+    failed = False
+    for name, flags in contracts.items():
+        executable = shutil.which(AGENTS[name][1])
+        if not executable:
+            continue
+        try:
+            result = subprocess.run(
+                _help_command(executable), capture_output=True, text=True, timeout=20
+            )
+            help_text = f"{result.stdout}\n{result.stderr}"
+            missing = [flag for flag in flags if flag not in help_text]
+        except (OSError, subprocess.SubprocessError):
+            missing = list(flags)
+        if missing:
+            failed = True
+            print(f"  ✗ {name:<10} {t('doctor_cli_changed', flags=', '.join(missing))}")
+        else:
+            print(f"  ✓ {name:<10} {t('doctor_ok')}")
+    return failed
+
+
+def github_auth_probe() -> bool:
+    executable = shutil.which("gh")
+    if not executable:
+        return False
+    try:
+        result = subprocess.run(
+            [executable, "auth", "status", "--hostname", "github.com"],
+            capture_output=True, text=True, timeout=20,
+        )
+        ok = result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    state = "✓ " + t("doctor_auth_ok") if ok else "✗ " + t("doctor_auth_bad")
+    print(f"\n{t('doctor_auth')}: {state}")
+    return not ok
 
 
 def deep_probe() -> bool:
@@ -3156,7 +3356,7 @@ def race_command(args: list[str]) -> int:
             return 0
 
     race = race_lib.start(root, task, agents)
-    record_event(root, "race", f"{task} · agents {', '.join(agents)}")
+    record_event(root, "race", f"race started · agents {', '.join(agents)}")
     print(t("race_started", run=race.run_id, base=race.base[:8]))
     try:
         subprocess.run(["zellij", "action", "new-tab", "--layout-string", race_layout(race)],

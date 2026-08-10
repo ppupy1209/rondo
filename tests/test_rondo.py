@@ -297,6 +297,24 @@ class RondoTests(unittest.TestCase):
         )
         self.assertEqual(run.call_args_list[1].args[0][-1], str(web.resolve()))
 
+    def test_open_directories_can_add_agent_workspaces(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        rondo["write_setting"]("panels", "codex")
+        api = self.base / "api"
+        api.mkdir()
+        scope = rondo["open_directories"].__globals__
+        with (
+            patch.dict(scope["os"].environ, {"ZELLIJ_SESSION_NAME": "rondo-project"}),
+            patch.dict(scope, {"installed": lambda _name: True}),
+            patch.object(scope["shutil"], "which", return_value="zellij"),
+            patch.object(scope["subprocess"], "run") as run,
+        ):
+            self.assertEqual(rondo["open_directories"](["--agents", str(api)]), 0)
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["zellij", "action", "new-tab", "--layout-string"])
+        self.assertIn("codex-session", command[-1])
+        self.assertIn(str(api.resolve()).replace("\\", "\\\\"), command[-1])
+
     def test_open_directories_starts_one_session_with_all_paths(self):
         rondo = load_script("rondo", self.config, self.cache)
         first = self.base / "company" / "service"
@@ -574,6 +592,23 @@ class RondoTests(unittest.TestCase):
         self.assertIn('command="claude-session.cmd"', layout)
         self.assertIn('command="codex-session.cmd"', layout)
         self.assertIn('command="agy-session.cmd"', layout)
+
+    def test_active_session_recreates_an_exited_agent_pane(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["repair_active_session"].__globals__
+        listed = subprocess.CompletedProcess([], 0, stdout=json.dumps([
+            {"id": 1, "title": "claude", "tab_name": "agents", "is_plugin": False, "exited": False},
+            {"id": 2, "title": "codex", "tab_name": "agents", "is_plugin": False, "exited": True},
+        ]))
+        done = subprocess.CompletedProcess([], 0)
+        with patch.object(scope["subprocess"], "run", side_effect=[listed, done, done, done, done]) as run:
+            repaired = rondo["repair_active_session"](
+                "rondo-project", ["claude", "codex"], self.base
+            )
+        self.assertEqual(repaired, ["codex"])
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertTrue(any("close-pane" in command for command in commands))
+        self.assertTrue(any("new-pane" in command and "codex" in command for command in commands))
 
     def test_windows_runs_companion_scripts_with_python(self):
         rondo = load_script("rondo", self.config, self.cache)

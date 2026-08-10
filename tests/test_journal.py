@@ -118,6 +118,15 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(len({row["id"] for row in rows}), 40)
         self.assertEqual(len(journal.search(self.repo, limit=100)), 40)
 
+    def test_clear_events_preserves_scheduled_jobs(self) -> None:
+        journal.record(self.repo, "note", "temporary work history")
+        job = journal.propose_job(
+            self.repo, "Keep this approved schedule", "codex", "every", "1h", "human"
+        )
+        self.assertEqual(journal.clear_events(self.repo), 1)
+        self.assertEqual(journal.search(self.repo), [])
+        self.assertEqual(journal.get_job(self.repo, job["id"])["prompt"], "Keep this approved schedule")
+
     def test_metadata_publish_accepts_only_a_valid_concurrent_winner(self) -> None:
         real_atomic_json = journal.atomic_json
 

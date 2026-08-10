@@ -249,9 +249,34 @@ PY
     rm -rf "$temporary"
 fi
 
+safe_link() {
+    source=$1
+    target=$2
+    if [ -e "$target" ] || [ -L "$target" ]; then
+        if [ ! -L "$target" ]; then
+            echo "Refusing to overwrite an unmanaged command: $target" >&2
+            exit 1
+        fi
+        if ! python3 - "$source" "$target" <<'PY'
+import os, pathlib, sys
+source, target = map(pathlib.Path, sys.argv[1:])
+try:
+    if source.resolve(strict=True) != target.resolve(strict=True):
+        raise SystemExit(1)
+except OSError:
+    raise SystemExit(1)
+PY
+        then
+            echo "Refusing to replace a launcher owned by another program: $target" >&2
+            exit 1
+        fi
+    fi
+    ln -sfn "$source" "$target"
+}
+
 for f in "$repo"/bin/*; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
-    ln -sfn "$f" "$BIN/$(basename "$f")"
+    safe_link "$f" "$BIN/$(basename "$f")"
     echo "link  $BIN/$(basename "$f")"
 done
 

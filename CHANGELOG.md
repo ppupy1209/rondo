@@ -2,6 +2,27 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.14.0] - 2026-08-10
+
+### 추가
+
+- `rondo open --agents <디렉터리...>`로 한 Zellij 세션 안에 디렉터리별 병렬 에이전트 작업공간 생성
+- 종료되거나 사라진 에이전트 패널을 기존 활성 세션에 다시 붙을 때 자동 복구
+- `rondo history status|on|off|clear`와 `RONDO_HISTORY=off` 개인정보 제어
+- Windows에서도 실제 Zellij 시작·입력 전달·종료 수명주기를 검사하는 E2E
+- GitHub 릴리스 자산 빌드 증명과 `THIRD_PARTY_NOTICES.md`
+
+### 변경
+
+- GitHub Actions를 전체 커밋 SHA로 고정하고 릴리스를 draft에서 검증 후 게시
+- `rondo doctor --deep`이 실제 에이전트 CLI 실행 옵션과 `gh auth` 상태를 점검
+- 자동 작업 이력에는 전달한 프롬프트 원문 대신 작업 메타데이터만 저장
+
+### 보안
+
+- 모든 커밋·태그 신원을 `Yeonwoo Kim <ppupy1209@naver.com>`으로 제한하는 로컬 훅과 CI 검사
+- Windows launcher와 Unix 링크가 Rondo 소유가 아닌 기존 명령을 덮어쓰지 않도록 차단
+
 ## [0.13.1] - 2026-08-10
 
 ### 수정
@@ -71,6 +92,7 @@
 - 제거 전 전체 대상 사전 검증과 Rondo가 소유한 launcher·hook만 제거
 - 진단 묶음은 허용 목록 기반 메타데이터만 기록하고 기존 파일을 덮어쓰지 않음
 
+[0.14.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.0
 [0.13.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.13.1
 [0.13.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.13.0
 [0.12.4]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.4

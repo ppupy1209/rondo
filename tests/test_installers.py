@@ -77,6 +77,8 @@ try {{
     def test_windows_launchers_add_their_bin_directory_to_path(self) -> None:
         source = (ROOT / "install.ps1").read_text(encoding="utf-8")
         self.assertEqual(source.count('set `"PATH=%~dp0;%PATH%`"'), 2)
+        self.assertIn("Rondo managed launcher v1", source)
+        self.assertIn("Refusing to overwrite an unmanaged command", source)
         self.assertIn("Run now in this PowerShell", source)
         self.assertIn("close all terminal windows", source)
 
@@ -106,6 +108,7 @@ try {{
         self.assertIn("45f25febb588d36f499232b3ba80a9edcde3b3a2a85bebb105a82457b0ca6aef", powershell)
         self.assertIn('filter="data"', shell)
         self.assertIn('[ -f "$f" ] && [ ! -L "$f" ] || continue', shell)
+        self.assertIn("Refusing to overwrite an unmanaged command", shell)
 
     def test_release_job_publishes_both_platform_archives_and_checksums(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
@@ -115,6 +118,17 @@ try {{
             self.assertIn(asset, workflow)
         self.assertIn('"v*.*.*"', workflow)
         self.assertIn("test \"$GITHUB_REF_NAME\" = \"v$version\"", workflow)
+        self.assertIn("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", workflow)
+        self.assertIn("--draft", workflow)
+        self.assertIn("--draft=false", workflow)
+
+    def test_workflows_pin_actions_to_full_commit_shas(self) -> None:
+        for name in ("ci.yml", "release.yml"):
+            workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            for line in workflow.splitlines():
+                if "uses: actions/" in line:
+                    reference = line.split("@", 1)[1].split()[0]
+                    self.assertRegex(reference, r"^[0-9a-f]{40}$")
 
 
 if __name__ == "__main__":

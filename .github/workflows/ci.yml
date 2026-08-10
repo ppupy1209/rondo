@@ -15,7 +15,11 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Commit identity policy
+        run: python3 scripts/check_identity.py --all
       - name: Python checks
         run: |
           python3 -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
@@ -35,10 +39,14 @@ jobs:
     env:
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
+      - name: Commit identity policy
+        run: python scripts/check_identity.py --all
       - name: Python checks
         run: |
           python -m py_compile bin/rondo bin/rondo-agent-session bin/rondo-lens bin/rondo-relay bin/rondo-claude-status bin/ai-status
@@ -49,3 +57,6 @@ jobs:
           ./install.ps1
           $env:Path = "$env:LOCALAPPDATA\Rondo\bin;$env:Path"
           rondo --version
+      - name: Windows Zellij lifecycle
+        shell: pwsh
+        run: ./tests/zellij_windows_smoke.ps1

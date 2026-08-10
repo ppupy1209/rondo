@@ -202,11 +202,31 @@ if (-not $Zellij -and -not (Test-Path (Join-Path $Bin "zellij.exe"))) {
     }
 }
 
+function Write-ManagedLauncher([string]$Target, [string]$Content) {
+    $marker = "@rem Rondo managed launcher v1"
+    if (Test-Path -LiteralPath $Target) {
+        if (Test-ReparsePoint $Target -or -not (Test-Path -LiteralPath $Target -PathType Leaf)) {
+            throw "Refusing to replace an unsafe launcher: $Target"
+        }
+        $existing = Get-Content -LiteralPath $Target -Raw
+        $legacy = $existing.StartsWith("@echo off") -and
+            $existing.Contains("chcp 65001 >nul") -and
+            $existing.Contains('set "PATH=%~dp0;%PATH%"') -and
+            $existing.Contains("\bin\")
+        if (-not $existing.StartsWith($marker) -and -not $legacy) {
+            throw "Refusing to overwrite an unmanaged command: $Target. Move or rename it, then run the installer again."
+        }
+    }
+    $temporary = "$Target.$PID.tmp"
+    [IO.File]::WriteAllText($temporary, "$marker`r`n$Content", [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporary -Destination $Target -Force
+}
+
 function Write-PythonLauncher([string]$Name, [string]$Script) {
     $target = Join-Path $Bin "$Name.cmd"
     $source = Join-Path $Repo "bin\$Script"
     $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`nset `"PATH=%~dp0;%PATH%`"`r`n`"$Python`" `"$source`" %*`r`n"
-    [IO.File]::WriteAllText($target, $content, [Text.UTF8Encoding]::new($false))
+    Write-ManagedLauncher $target $content
 }
 
 @{
@@ -221,7 +241,7 @@ function Write-AgentLauncher([string]$Name, [string]$Agent) {
     $target = Join-Path $Bin "$Name.cmd"
     $source = Join-Path $Repo "bin\rondo-agent-session"
     $content = "@echo off`r`nchcp 65001 >nul`r`nset PYTHONUTF8=1`r`nset `"PATH=%~dp0;%PATH%`"`r`n`"$Python`" `"$source`" $Agent %*`r`n"
-    [IO.File]::WriteAllText($target, $content, [Text.UTF8Encoding]::new($false))
+    Write-ManagedLauncher $target $content
 }
 
 Write-AgentLauncher "claude-session" "claude"
