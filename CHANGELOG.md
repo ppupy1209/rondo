@@ -2,6 +2,15 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.14.3] - 2026-08-10
+
+### 수정
+
+- Windows 첫 실행부터 각 Zellij 클라이언트의 마우스 클릭을 활성화하고 기본 입력 모드를 `normal`로 고정
+- 새 레이아웃에서 상태 표시줄 대신 첫 에이전트 패널에 초점을 지정
+- 기존 세션 재연결 시 스크롤·잠금 모드를 해제하고 실제 에이전트 패널로 초점을 이동
+- 사용자 전역 Zellij 설정 파일을 만들거나 덮어쓰지 않고 Rondo 실행에만 마우스 옵션 적용
+
 ## [0.14.2] - 2026-08-10
 
 ### 변경
@@ -110,6 +119,7 @@
 - 제거 전 전체 대상 사전 검증과 Rondo가 소유한 launcher·hook만 제거
 - 진단 묶음은 허용 목록 기반 메타데이터만 기록하고 기존 파일을 덮어쓰지 않음
 
+[0.14.3]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.3
 [0.14.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.2
 [0.14.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.1
 [0.14.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.14.0

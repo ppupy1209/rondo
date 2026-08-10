@@ -91,8 +91,18 @@ try {{
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         source = (ROOT / "tests" / "rondo_windows_entry_smoke.ps1").read_text(encoding="utf-8")
         self.assertIn("rondo_windows_entry_smoke.ps1", workflow)
+        self.assertIn("agents pane is not focused", source)
         self.assertIn("agents tab was not created", source)
         self.assertIn("Rondo did not create a session for a non-Git directory", source)
+
+    def test_windows_first_launch_enables_mouse_without_global_config(self) -> None:
+        cli = (ROOT / "bin" / "rondo").read_text(encoding="utf-8")
+        installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
+        self.assertIn(
+            'return ["options", "--mouse-mode", "true", "--default-mode", "normal"]',
+            cli,
+        )
+        self.assertNotIn("zellij\\config.kdl", installer.lower())
 
     def test_readme_install_urls_match_the_cli_version(self) -> None:
         version = subprocess.run(

@@ -184,6 +184,22 @@ class RondoTests(unittest.TestCase):
 
         focus.assert_called_once_with("rondo-project")
 
+    def test_agent_focus_restores_normal_mode_before_moving_to_a_pane(self):
+        rondo = load_script("rondo", self.config, self.cache)
+        scope = rondo["focus_agents_tab"].__globals__
+        success = unittest.mock.Mock(returncode=0, stdout="", stderr="")
+        with patch.object(scope["subprocess"], "run", return_value=success) as run:
+            rondo["focus_agents_tab"]("rondo-project")
+
+        self.assertEqual(
+            [call.args[0][-2:] for call in run.call_args_list],
+            [
+                ["switch-mode", "normal"],
+                ["go-to-tab-name", "agents"],
+                ["move-focus", "down"],
+            ],
+        )
+
     def test_focus_helper_does_not_hold_the_project_directory(self):
         rondo = load_script("rondo", self.config, self.cache)
         scope = rondo["schedule_agents_focus"].__globals__
@@ -236,7 +252,10 @@ class RondoTests(unittest.TestCase):
         repair.assert_called_once_with("rondo-project", ["claude"], Path("/tmp/project"))
         execvp.assert_called_once_with(
             "zellij",
-            ["zellij", "attach", "rondo-project"],
+            [
+                "zellij", "attach", "rondo-project", "options",
+                "--mouse-mode", "true", "--default-mode", "normal",
+            ],
         )
 
     def test_settings_are_atomic_and_private(self):
@@ -376,7 +395,11 @@ class RondoTests(unittest.TestCase):
 
         command = execvp.call_args.args[1]
         self.assertEqual(command[:3], ["zellij", "-s", rondo["parallel_session_name"]([first.resolve(), second.resolve()])])
-        layout = Path(command[-1]).read_text()
+        self.assertEqual(
+            command[-5:],
+            ["options", "--mouse-mode", "true", "--default-mode", "normal"],
+        )
+        layout = Path(command[4]).read_text()
         self.assertEqual(layout.count("    tab name="), 2)
         self.assertIn(json.dumps(str(first.resolve()), ensure_ascii=False), layout)
         self.assertIn(json.dumps(str(second.resolve()), ensure_ascii=False), layout)
@@ -404,7 +427,13 @@ class RondoTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "stop"):
                 rondo["open_directories"]([str(directory)])
 
-        execvp.assert_called_once_with("zellij", ["zellij", "attach", name])
+        execvp.assert_called_once_with(
+            "zellij",
+            [
+                "zellij", "attach", name, "options",
+                "--mouse-mode", "true", "--default-mode", "normal",
+            ],
+        )
 
     def test_open_directories_rejects_missing_paths_before_starting_zellij(self):
         rondo = load_script("rondo", self.config, self.cache)
@@ -625,6 +654,9 @@ class RondoTests(unittest.TestCase):
         self.assertIn(f'command="codex-session{suffix}"', layout)
         self.assertIn(f'command="kimi-session{suffix}"', layout)
         self.assertIn('tab name="shell"', layout)
+        self.assertIn(
+            f'command="claude-session{suffix}" size="50%" focus=true', layout
+        )
         self.assertLess(layout.index('tab name="shell"'), layout.index('tab name="agents" focus=true'))
 
     def test_windows_layout_uses_cmd_launchers(self):
@@ -1133,7 +1165,11 @@ class RondoTests(unittest.TestCase):
         chdir.assert_called_once_with(self.base)
         schedule_focus.assert_called_once_with("rondo-anywhere")
         execvp.assert_called_once_with(
-            "zellij", ["zellij", "-s", "rondo-anywhere", "-n", str(self.base / "layout.kdl")]
+            "zellij",
+            [
+                "zellij", "-s", "rondo-anywhere", "-n", str(self.base / "layout.kdl"),
+                "options", "--mouse-mode", "true", "--default-mode", "normal",
+            ],
         )
 
     def test_active_session_schedules_agents_focus_after_attach(self):
@@ -1159,7 +1195,13 @@ class RondoTests(unittest.TestCase):
                 rondo["open_session"]()
 
         schedule_focus.assert_called_once_with("rondo-active")
-        execvp.assert_called_once_with("zellij", ["zellij", "attach", "rondo-active"])
+        execvp.assert_called_once_with(
+            "zellij",
+            [
+                "zellij", "attach", "rondo-active", "options",
+                "--mouse-mode", "true", "--default-mode", "normal",
+            ],
+        )
 
     def test_missing_configured_agent_is_skipped(self):
         rondo = load_script("rondo", self.config, self.cache)

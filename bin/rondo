@@ -30,7 +30,7 @@ from rondo import approval as approval_lib
 from rondo import audience as audience_lib
 from rondo.paths import repo_key
 
-VERSION = "0.14.2"
+VERSION = "0.14.3"
 WINDOWS = os.name == "nt"
 MAX_AGENT_MESSAGE_CHARS = 12_000
 MAX_SESSION_NAME_CHARS = 56
@@ -1251,16 +1251,22 @@ def zellij_sessions() -> tuple[set[str], set[str]]:
 
 def focus_agents_tab(session_name: str, wait: float = 3.0) -> None:
     """Select the agent dashboard for a connected terminal client."""
-    command = ["zellij", "-s", session_name, "action", "go-to-tab-name", "agents"]
+    commands = [
+        ["zellij", "-s", session_name, "action", "switch-mode", "normal"],
+        ["zellij", "-s", session_name, "action", "go-to-tab-name", "agents"],
+        ["zellij", "-s", session_name, "action", "move-focus", "down"],
+    ]
     deadline = time.monotonic() + wait
     last = ""
     while True:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
+        results = [
+            subprocess.run(command, capture_output=True, text=True, timeout=10)
+            for command in commands
+        ]
+        if all(result.returncode == 0 for result in results):
             return
-        last = result.stderr.strip() or result.stdout.strip()
+        failed = next(result for result in results if result.returncode != 0)
+        last = failed.stderr.strip() or failed.stdout.strip()
         if time.monotonic() >= deadline:
             raise RuntimeError(last or t("pane_lookup_failed"))
         time.sleep(0.1)
@@ -1322,6 +1328,11 @@ def pane_command(name: str) -> str:
     return AGENTS[name][0] + ".cmd"
 
 
+def zellij_client_options() -> list[str]:
+    """Keep every Rondo client clickable and out of modal input states."""
+    return ["options", "--mouse-mode", "true", "--default-mode", "normal"]
+
+
 def write_layout(panels: list[str]) -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     target = CACHE_DIR / "layout.kdl"
@@ -1333,7 +1344,7 @@ def write_layout(panels: list[str]) -> Path:
         '    tab name="agents" focus=true {',
         f'        pane name="status" command="{status_command}" size=1 borderless=true',
         '        pane split_direction="vertical" {',
-        f'            pane name="{first}" command={kdl_string(pane_command(first))} size="50%"',
+        f'            pane name="{first}" command={kdl_string(pane_command(first))} size="50%" focus=true',
     ]
     if rest:
         lines.append('            pane split_direction="horizontal" {')
@@ -1399,9 +1410,10 @@ def _directory_tab_lines(directory: Path, panels: list[str] | None = None) -> li
     ]
     for index, panel in enumerate(panels):
         size = ' size="50%"' if index == 0 and len(panels) > 1 else ""
+        focus = " focus=true" if index == 0 else ""
         lines.append(
             f"            pane name={kdl_string(panel)} command={kdl_string(pane_command(panel))} "
-            f"cwd={kdl_string(str(directory))}{size}"
+            f"cwd={kdl_string(str(directory))}{size}{focus}"
         )
     lines.extend(["        }", "    }"])
     return lines
@@ -1466,14 +1478,21 @@ def open_directories(values: list[str]) -> int:
     name = parallel_session_name(directories)
     active, exited = zellij_sessions()
     if name in active:
-        os.execvp("zellij", ["zellij", "attach", name])
+        os.execvp("zellij", ["zellij", "attach", name, *zellij_client_options()])
     if name in exited:
         os.execvp(
-            "zellij", ["zellij", "attach", "--force-run-commands", name]
+            "zellij",
+            [
+                "zellij", "attach", "--force-run-commands", name,
+                *zellij_client_options(),
+            ],
         )
     layout = write_directory_layout(directories, name, panels)
     print(t("open_started", count=len(directories), mode=mode))
-    os.execvp("zellij", ["zellij", "-s", name, "-n", str(layout)])
+    os.execvp(
+        "zellij",
+        ["zellij", "-s", name, "-n", str(layout), *zellij_client_options()],
+    )
     return 0
 
 
@@ -1585,7 +1604,7 @@ def open_session(resume_agent: str | None = None, handoff: Path | None = None) -
         if resume_agent and handoff:
             send_agent_message(resume_agent, [resume_prompt(handoff)], session_name=name)
         schedule_agents_focus(name)
-        os.execvp("zellij", ["zellij", "attach", name])
+        os.execvp("zellij", ["zellij", "attach", name, *zellij_client_options()])
     layout = write_layout(panels)
     print(f"{t('panels')}: {' '.join(panels)}")
     if name in exited:
@@ -1602,9 +1621,12 @@ def open_session(resume_agent: str | None = None, handoff: Path | None = None) -
         if resume_agent and handoff:
             send_agent_message(resume_agent, [resume_prompt(handoff)], session_name=name)
         schedule_agents_focus(name)
-        os.execvp("zellij", ["zellij", "attach", name])
+        os.execvp("zellij", ["zellij", "attach", name, *zellij_client_options()])
     schedule_agents_focus(name)
-    os.execvp("zellij", ["zellij", "-s", name, "-n", str(layout)])
+    os.execvp(
+        "zellij",
+        ["zellij", "-s", name, "-n", str(layout), *zellij_client_options()],
+    )
 
 
 def add_agent(name: str | None) -> None:

@@ -53,6 +53,7 @@ function Wait-AgentPane([string]$Name) {
             if ($agent) {
                 $screen = (& $Zellij -s $Name action dump-screen --pane-id ([string]$agent.id) 2>$null) -join "`n"
                 if ($screen.Contains("FAKE_AGENT_READY")) {
+                    if (-not $agent.is_focused) { throw "agents pane is not focused" }
                     $tabs = (& $Zellij -s $Name action list-tabs --state --json 2>$null) | ConvertFrom-Json
                     if (-not ($tabs | Where-Object { $_.name -eq "agents" })) {
                         throw "agents tab was not created"
