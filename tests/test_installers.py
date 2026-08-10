@@ -12,6 +12,39 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallerContractTest(unittest.TestCase):
+    def test_powershell_checksum_retries_an_empty_hash_result(self) -> None:
+        executable = shutil.which("powershell") or shutil.which("pwsh")
+        if not executable:
+            self.skipTest("PowerShell is unavailable")
+
+        source = (ROOT / "install.ps1").read_text(encoding="utf-8")
+        start = source.index("function Get-Sha256")
+        end = source.index("function Get-ManagedVersion", start)
+        helper = source[start:end]
+        command = f"""\
+Import-Module Microsoft.PowerShell.Utility
+$script:attempts = 0
+function Get-FileHash {{
+    param([string]$LiteralPath, [string]$Algorithm)
+    $script:attempts++
+    if ($script:attempts -eq 1) {{ return $null }}
+    return [pscustomobject]@{{ Hash = ("A" * 64) }}
+}}
+{helper}
+$digest = Get-Sha256 "ignored"
+if ($digest -ne ("a" * 64) -or $script:attempts -ne 2) {{
+    throw "SHA-256 retry contract failed"
+}}
+"""
+        encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
+        result = subprocess.run(
+            [executable, "-NoProfile", "-EncodedCommand", encoded],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_powershell_bootstrap_param_block_supports_invoke_expression(self) -> None:
         executable = shutil.which("powershell") or shutil.which("pwsh")
         if not executable:
@@ -50,6 +83,8 @@ try {{
             source = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn(f"/rondo/v{version}/install.sh", source)
             self.assertIn(f"/rondo/v{version}/install.ps1", source)
+            self.assertIn(f"-Version v{version}", source)
+            self.assertIn("& ([scriptblock]::Create((irm ", source)
 
     def test_bootstraps_use_versioned_verified_assets(self) -> None:
         shell = (ROOT / "install.sh").read_text(encoding="utf-8")

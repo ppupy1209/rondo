@@ -2,6 +2,12 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.12.4] - 2026-08-10
+
+### 수정
+
+- Windows 설치 파일의 SHA-256 계산이 일시적으로 결과를 반환하지 않을 때 재시도하고, 원격 설치 스크립트를 독립된 스크립트 블록으로 실행하도록 변경
+
 ## [0.12.3] - 2026-08-10
 
 ### 수정
@@ -51,6 +57,7 @@
 - 제거 전 전체 대상 사전 검증과 Rondo가 소유한 launcher·hook만 제거
 - 진단 묶음은 허용 목록 기반 메타데이터만 기록하고 기존 파일을 덮어쓰지 않음
 
+[0.12.4]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.4
 [0.12.3]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.3
 [0.12.2]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.2
 [0.12.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.12.1

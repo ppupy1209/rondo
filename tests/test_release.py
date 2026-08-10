@@ -151,6 +151,7 @@ class ReleaseTest(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "unmanaged"):
             release.metadata(self.root)
 
+    @unittest.skipIf(os.name == "nt", "creating symbolic links may require Windows privileges")
     def test_purge_symlink_is_rejected_before_any_removal(self) -> None:
         binary = self.base / "bin"
         binary.mkdir()

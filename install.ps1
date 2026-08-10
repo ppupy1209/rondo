@@ -20,6 +20,23 @@ function Test-ReparsePoint([string]$Path) {
     return [bool]((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)
 }
 
+function Get-Sha256([string]$Path) {
+    $failure = "Get-FileHash returned no valid digest."
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            $result = Get-FileHash -LiteralPath $Path -Algorithm SHA256
+            $digest = if ($result) { [string]$result.Hash } else { "" }
+            if ($digest -match '^[0-9a-fA-F]{64}$') {
+                return $digest.ToLowerInvariant()
+            }
+        } catch {
+            $failure = $_.Exception.Message
+        }
+        if ($attempt -lt 3) { Start-Sleep -Milliseconds 200 }
+    }
+    throw "Unable to calculate SHA-256 after 3 attempts: $Path ($failure)"
+}
+
 function Get-ManagedVersion([string]$Path) {
     if (Test-ReparsePoint $Path) { throw "Refusing a linked Rondo installation: $Path" }
     $marker = Join-Path $Path ".rondo-release.json"
@@ -43,7 +60,7 @@ function Confirm-Checksum([string]$Checksums, [string]$Artifact, [string]$Name) 
         }
     }
     if ($entries.Count -ne 1) { throw "Checksum entry is missing or ambiguous: $Name" }
-    $actual = (Get-FileHash -LiteralPath $Artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actual = Get-Sha256 $Artifact
     if ($actual -ne $entries[0]) { throw "Checksum mismatch: $Name" }
 }
 
@@ -172,7 +189,7 @@ if (-not $Zellij -and -not (Test-Path (Join-Path $Bin "zellij.exe"))) {
     New-Item -ItemType Directory -Force -Path $extract | Out-Null
     try {
         Invoke-WebRequest "$base/$asset" -OutFile $zip
-        $actualDigest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actualDigest = Get-Sha256 $zip
         if ($actualDigest -ne $expectedDigest) { throw "Checksum mismatch: $asset" }
         Expand-Archive $zip -DestinationPath $extract -Force
         $binaries = @(Get-ChildItem -LiteralPath $extract -Filter zellij.exe -Recurse -File)
