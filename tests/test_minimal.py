@@ -61,7 +61,7 @@ class ProjectCase(unittest.TestCase):
 
 class MinimalCoreTests(ProjectCase):
     def test_version_and_supported_agents_are_deliberately_small(self):
-        self.assertEqual(__version__, "0.15.3")
+        self.assertEqual(__version__, "0.15.4")
         self.assertEqual(core.AGENTS, ("claude", "codex", "gemini"))
         with self.assertRaises(core.RondoError):
             core.normalize_agent("grok")
@@ -113,6 +113,7 @@ class MinimalCoreTests(ProjectCase):
         context = core.state_dir(self.root) / "context.md"
         text = context.read_text(encoding="utf-8")
         self.assertIn("implemented state machine", text)
+        self.assertIn("- Approval: manual", text)
         self.assertLessEqual(len(text.encode("utf-8")), core.MAX_CONTEXT_BYTES)
         config["context"] = False
         core.save_config(self.root, config)
@@ -128,6 +129,12 @@ class MinimalCoreTests(ProjectCase):
         messages = core.recent_messages(self.root)
         self.assertEqual(messages[0]["kind"], "handoff")
         self.assertIn("[REDACTED]", core.format_message(messages[0]))
+
+    def test_approval_mode_is_bounded_to_two_safe_choices(self):
+        config = core.validate_config({"agents": ["codex"], "approval": "workspace"})
+        self.assertEqual(config["approval"], "workspace")
+        with self.assertRaises(core.RondoError):
+            core.validate_config({"agents": ["codex"], "approval": "unrestricted"})
 
     def test_checkpoint_then_handoff_preserves_context(self):
         self.initialize(["claude", "codex"])
@@ -201,6 +208,17 @@ class LayoutTests(ProjectCase):
         self.assertEqual(selected, ["claude", "codex"])
         self.assertIn("Space 선택/해제", output.getvalue())
 
+    def test_interactive_approval_picker_uses_two_choices(self):
+        cli = load_cli()
+        output = StringIO()
+        with redirect_stdout(output), mock.patch.object(output, "isatty", return_value=True), mock.patch.object(
+            cli.sys.stdin, "isatty", return_value=True
+        ), mock.patch.object(cli, "_read_key", side_effect=("down", "confirm")):
+            selected = cli.choose_approval("manual")
+
+        self.assertEqual(selected, "workspace")
+        self.assertIn("프로젝트 안에서 자동 승인", output.getvalue())
+
     @unittest.skipIf(os.name == "nt", "Unix socket paths do not apply on Windows")
     def test_rondo_uses_a_short_private_zellij_socket_directory(self):
         with mock.patch.dict(os.environ, {"ZELLIJ_SOCKET_DIR": "/an/intentionally/long/user/socket/path"}):
@@ -246,7 +264,7 @@ class LayoutTests(ProjectCase):
         )
         self.assertIn('                pane name="Gemini"', layout)
 
-    def test_native_provider_commands_receive_only_coordination_prompt(self):
+    def test_native_provider_commands_use_manual_approval_by_default(self):
         with mock.patch.dict(
             os.environ,
             {
@@ -259,12 +277,65 @@ class LayoutTests(ProjectCase):
             claude = core.provider_command("claude", self.root)
             codex = core.provider_command("codex", self.root)
             gemini = core.provider_command("gemini", self.root)
-        self.assertEqual(claude[:2], ["claude-test", "--append-system-prompt"])
-        self.assertEqual(codex[:2], ["codex-test", "-c"])
-        self.assertIn("developer_instructions=", codex[2])
-        self.assertNotIn('"', codex[2])
-        self.assertIn("lightweight coordinator", codex[2])
-        self.assertEqual(gemini[:2], ["gemini-test", "--prompt-interactive"])
+        self.assertEqual(claude[:3], ["claude-test", "--permission-mode", "manual"])
+        self.assertIn("--append-system-prompt", claude)
+        self.assertEqual(codex[:5], ["codex-test", "--sandbox", "workspace-write", "--ask-for-approval", "untrusted"])
+        self.assertIn("developer_instructions=", codex[-1])
+        self.assertNotIn('"', codex[-1])
+        self.assertIn("lightweight coordinator", codex[-1])
+        self.assertIn("immediately execute `rondo message AGENT TEXT`", codex[-1])
+        self.assertEqual(gemini[:3], ["gemini-test", "--approval-mode", "default"])
+        self.assertIn("--prompt-interactive", gemini)
+
+    def test_workspace_approval_keeps_each_provider_guarded(self):
+        config = dict(core.DEFAULT_CONFIG)
+        config["approval"] = "workspace"
+        core.save_config(self.root, config)
+        with mock.patch.dict(
+            os.environ,
+            {
+                "RONDO_CLAUDE_COMMAND": "claude-test",
+                "RONDO_CODEX_COMMAND": "codex-test",
+                "RONDO_GEMINI_COMMAND": "gemini-test",
+            },
+            clear=False,
+        ):
+            commands = {
+                agent: core.provider_command(agent, self.root)
+                for agent in core.AGENTS
+            }
+
+        self.assertEqual(commands["claude"][:3], ["claude-test", "--permission-mode", "auto"])
+        self.assertIn("--approve-for-me", commands["codex"])
+        self.assertIn("workspace-write", commands["codex"])
+        self.assertIn("auto_edit", commands["gemini"])
+        self.assertIn("--sandbox", commands["gemini"])
+        all_arguments = " ".join(argument for command in commands.values() for argument in command)
+        self.assertNotIn("bypassPermissions", all_arguments)
+        self.assertNotIn("dangerously-bypass", all_arguments)
+        self.assertNotIn(" yolo ", " " + all_arguments + " ")
+
+    def test_exited_zellij_session_is_not_treated_as_active(self):
+        output = "rondo-demo [Created 2m ago] (EXITED - attach to resurrect)\nother [Created 1m ago]"
+        completed = subprocess.CompletedProcess(["zellij"], 0, stdout=output, stderr="")
+        with mock.patch.object(core, "zellij_executable", return_value="zellij"), mock.patch.object(
+            core.subprocess, "run", return_value=completed
+        ):
+            self.assertEqual(core.zellij_session_status("rondo-demo"), "exited")
+            self.assertEqual(core.zellij_session_status("other"), "active")
+            self.assertFalse(core.zellij_session_exists("rondo-demo"))
+
+    def test_fresh_screen_retires_stale_active_panes(self):
+        self.initialize(["claude", "codex"])
+        core.register_session(self.root, "claude", "old-claude", "0")
+        core.register_session(self.root, "codex", "old-codex", "1")
+        core.register_relay(self.root, "2")
+
+        core.retire_active_sessions(self.root)
+
+        state = core.load_state(self.root)
+        self.assertEqual({item["status"] for item in state["sessions"].values()}, {"closed"})
+        self.assertEqual(state["relay"]["status"], "closed")
 
 
 class DistributionTests(unittest.TestCase):
@@ -288,7 +359,7 @@ class DistributionTests(unittest.TestCase):
     def test_release_version_is_consistent(self):
         for name in ("README.md", "README.en.md", "CHANGELOG.md"):
             text = (ROOT / name).read_text(encoding="utf-8")
-            self.assertIn("0.15.3", text)
+            self.assertIn("0.15.4", text)
 
 
 class CleanupTests(unittest.TestCase):

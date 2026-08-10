@@ -30,6 +30,7 @@ DISPLAY_NAMES = {"claude": "Claude", "codex": "Codex", "gemini": "Gemini"}
 DEFAULT_CONFIG = {
     "schema": 1,
     "agents": list(AGENTS),
+    "approval": "manual",
     "context": True,
     "failover": "auto",
     "failover_order": list(AGENTS),
@@ -260,6 +261,8 @@ def validate_config(value: dict) -> dict:
     result["agents"] = clean
     if result.get("context") not in (True, False):
         raise RondoError("context 값은 true 또는 false여야 합니다.")
+    if result.get("approval") not in ("manual", "workspace"):
+        raise RondoError("approval 값은 manual 또는 workspace여야 합니다.")
     if result.get("failover") not in ("auto", "ask", "off"):
         raise RondoError("failover 값은 auto, ask, off 중 하나여야 합니다.")
     order: List[str] = []
@@ -367,6 +370,11 @@ def render_context(root: Path, state: Optional[dict] = None, config: Optional[di
         "# Rondo context",
         "",
         "> Structured project state only. No full transcript or hidden reasoning is stored.",
+        "",
+        "## Session policy",
+        "",
+        "- Enabled AIs: %s" % ", ".join(display_name(agent) for agent in config["agents"]),
+        "- Approval: %s" % config["approval"],
         "",
         "## Task",
         "",
@@ -536,6 +544,24 @@ def close_relay(root: Path) -> None:
         state = load_state(root)
         state["relay"] = {"status": "closed", "pane_id": "", "last_seen": utc_now()}
         save_state(root, state)
+
+
+def retire_active_sessions(root: Path) -> None:
+    """Close pane records left behind when a whole Zellij session exited."""
+    with project_lock(root):
+        state = load_state(root)
+        stamp = utc_now()
+        changed = False
+        for session in state.get("sessions", {}).values():
+            if session.get("status") == "active":
+                session["status"] = "closed"
+                session["last_seen"] = stamp
+                changed = True
+        if state.get("relay", {}).get("status") == "active":
+            state["relay"] = {"status": "closed", "pane_id": "", "last_seen": stamp}
+            changed = True
+        if changed:
+            save_state(root, state)
 
 
 def set_task(root: Path, goal: str, agent: str = "", session: str = "") -> None:
@@ -794,8 +820,11 @@ def protocol_prompt(root: Path, agent: str, role: str = "worker") -> str:
         duty = "You may run development checks, but you must not certify your own implementation. At milestones run rondo checkpoint SUMMARY; when ready run rondo request-review."
     return (
         "Rondo is only a lightweight coordinator; the native %s CLI remains the main tool. "
-        "Read %s when it exists. %s Send all cross-agent communication with "
-        "rondo message AGENT TEXT so it stays visible in Relay. Never put secrets or hidden reasoning in Rondo state."
+        "Read %s when it exists. %s When the user asks you to ask, delegate to, or review with another AI, "
+        "immediately execute `rondo message AGENT TEXT` with your shell tool; do not merely describe the request. "
+        "Rondo types that text into the target AI's visible pane and keeps a Relay audit copy. "
+        "Use `rondo next AGENT SUMMARY` when ownership should move, and never claim delivery unless the command succeeds. "
+        "Never put secrets or hidden reasoning in Rondo state."
     ) % (display_name(agent), context, duty)
 
 
@@ -804,11 +833,19 @@ def provider_command(agent: str, root: Path, role: str = "worker") -> List[str]:
     if not executable:
         raise RondoError("%s CLI가 PATH에 없습니다. 먼저 공식 CLI를 설치하세요." % display_name(agent))
     prompt = protocol_prompt(root, agent, role)
+    approval = load_config(root)["approval"]
     if agent == "claude":
-        return [executable, "--append-system-prompt", prompt]
+        mode = "auto" if approval == "workspace" else "manual"
+        return [executable, "--permission-mode", mode, "--append-system-prompt", prompt]
     if agent == "codex":
-        return [executable, "-c", "developer_instructions='%s'" % prompt.replace("'", "’")]
-    return [executable, "--prompt-interactive", prompt]
+        command = [executable, "--sandbox", "workspace-write"]
+        command += ["--approve-for-me"] if approval == "workspace" else ["--ask-for-approval", "untrusted"]
+        return [*command, "-c", "developer_instructions='%s'" % prompt.replace("'", "’")]
+    mode = "auto_edit" if approval == "workspace" else "default"
+    command = [executable, "--approval-mode", mode]
+    if approval == "workspace":
+        command.append("--sandbox")
+    return [*command, "--prompt-interactive", prompt]
 
 
 def session_name(root: Path) -> str:
@@ -864,16 +901,38 @@ def cleanup_stale_windows_marker(name: str) -> bool:
     return True
 
 
-def zellij_session_exists(name: str) -> bool:
+def zellij_session_status(name: str) -> str:
     try:
         executable = zellij_executable()
         if not executable:
-            return False
+            return "missing"
         result = subprocess.run(
-            [executable, "list-sessions", "--short"], capture_output=True, text=True,
+            [executable, "list-sessions", "--no-formatting"], capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=8, check=False,
         )
-        return result.returncode == 0 and name in {line.strip() for line in result.stdout.splitlines()}
+        if result.returncode != 0:
+            return "missing"
+        for line in result.stdout.splitlines():
+            if line == name or line.startswith(name + " "):
+                return "exited" if "(EXITED" in line else "active"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "missing"
+
+
+def zellij_session_exists(name: str) -> bool:
+    return zellij_session_status(name) == "active"
+
+
+def delete_exited_zellij_session(name: str) -> bool:
+    if zellij_session_status(name) != "exited":
+        return False
+    try:
+        result = subprocess.run(
+            [zellij_executable(), "delete-session", "--force", name], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=8, check=False,
+        )
+        return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
