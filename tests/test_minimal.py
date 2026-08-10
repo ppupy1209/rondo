@@ -59,7 +59,7 @@ class ProjectCase(unittest.TestCase):
 
 class MinimalCoreTests(ProjectCase):
     def test_version_and_supported_agents_are_deliberately_small(self):
-        self.assertEqual(__version__, "0.15.0")
+        self.assertEqual(__version__, "0.15.1")
         self.assertEqual(core.AGENTS, ("claude", "codex", "gemini"))
         with self.assertRaises(core.RondoError):
             core.normalize_agent("grok")
@@ -187,19 +187,23 @@ class MinimalCoreTests(ProjectCase):
 
 
 class LayoutTests(ProjectCase):
-    def test_layout_has_only_enabled_agent_tabs_and_relay(self):
+    def test_layout_splits_enabled_agents_in_one_tab_and_keeps_relay_separate(self):
         cli = load_cli()
         core.ensure_safe_state_dir(self.root)
         path = cli.write_layout(self.root, ["claude", "gemini"])
         layout = path.read_text(encoding="utf-8")
-        self.assertIn('tab name="Claude"', layout)
-        self.assertIn('tab name="Gemini"', layout)
+        self.assertIn('tab name="Agents" focus=true', layout)
+        self.assertIn('pane split_direction="vertical"', layout)
+        self.assertIn('pane name="Claude"', layout)
+        self.assertIn('pane name="Gemini"', layout)
         self.assertIn('tab name="Relay"', layout)
-        self.assertNotIn('tab name="Codex"', layout)
+        self.assertNotIn('pane name="Codex"', layout)
+        self.assertNotIn('tab name="Claude"', layout)
+        self.assertNotIn('tab name="Gemini"', layout)
         self.assertNotIn("status", layout.lower())
         self.assertNotIn("dashboard", layout.lower())
         self.assertEqual(layout.count("rondo-agent-session"), 2)
-        self.assertEqual(layout.count('plugin location="tab-bar"'), 3)
+        self.assertEqual(layout.count('plugin location="tab-bar"'), 2)
 
     def test_native_provider_commands_receive_only_coordination_prompt(self):
         with mock.patch.dict(
@@ -243,7 +247,7 @@ class DistributionTests(unittest.TestCase):
     def test_release_version_is_consistent(self):
         for name in ("README.md", "README.en.md", "CHANGELOG.md"):
             text = (ROOT / name).read_text(encoding="utf-8")
-            self.assertIn("0.15.0", text)
+            self.assertIn("0.15.1", text)
 
 
 class CleanupTests(unittest.TestCase):

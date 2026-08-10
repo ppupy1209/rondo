@@ -19,13 +19,13 @@ Install and sign in to at least one official provider CLI first: `codex`, `claud
 Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.0/install.ps1))) -Version v0.15.0
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.1/install.ps1))) -Version v0.15.1
 ```
 
 macOS / Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.0/install.sh | RONDO_VERSION=v0.15.0 sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.1/install.sh | RONDO_VERSION=v0.15.1 sh
 ```
 
 The installer checks for Python 3.10+ and installs a SHA-256-verified Zellij 0.44.3 build. It never installs or updates provider CLIs.
@@ -34,7 +34,7 @@ The installer checks for Python 3.10+ and installs a SHA-256-verified Zellij 0.4
 
 Run `rondo` in any project directory. The first run asks which installed CLIs to use; later runs enter that project's tabs immediately.
 
-Each AI has a separate Zellij tab. Click the `Claude`, `Codex`, `Gemini`, or `Relay` title, or press `Ctrl+t` followed by Left/Right. Rondo starts Zellij with mouse support enabled and normal mode selected.
+Enabled Claude, Codex, and Gemini CLIs share one `Agents` tab as equal-width split panes. Click a pane or press `Ctrl+p` followed by an arrow key to move between AIs. Relay remains a separate tab; use `Ctrl+t` followed by an arrow key to switch to it. Rondo starts Zellij with mouse support enabled and normal mode selected.
 
 ## Typical flow
 
@@ -61,7 +61,7 @@ Rondo rejects that command in any session that participated in implementation. A
 ## Commands
 
 ```text
-rondo                         open native AI tabs and Relay
+rondo                         open split AI panes and Relay
 rondo setup                   change enabled AIs
 rondo context on|off          enable or disable shared context
 rondo task "goal"             record the current goal

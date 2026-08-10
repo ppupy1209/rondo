@@ -20,7 +20,7 @@ from rondo import core
 HELP = """Rondo {version} - AI CLI 사이의 가벼운 인계 도구
 
 사용법:
-  rondo                         현재 프로젝트의 AI 탭과 Relay 열기
+  rondo                         현재 프로젝트의 AI 패널과 Relay 열기
   rondo setup                   Claude, Codex, Gemini 사용 여부 설정
   rondo context on|off          구조화된 작업 맥락 공유 켜기/끄기
   rondo task "목표"             현재 작업 목표 기록
@@ -46,25 +46,29 @@ def write_layout(root: Path, agents: List[str]) -> Path:
     python = kdl(sys.executable)
     agent_session = kdl(str(runtime / "rondo-agent-session"))
     relay = kdl(str(runtime / "rondo-relay"))
-    lines = ["layout {"]
+    lines = [
+        "layout {",
+        "    tab name=\"Agents\" focus=true {",
+        "        pane size=1 borderless=true {",
+        "            plugin location=\"tab-bar\"",
+        "        }",
+        "        pane split_direction=\"vertical\" {",
+    ]
     for index, agent in enumerate(agents):
         focus = " focus=true" if index == 0 else ""
         lines.extend(
             [
-                "    tab name=%s%s {" % (kdl(core.display_name(agent)), focus),
-                "        pane size=1 borderless=true {",
-                "            plugin location=\"tab-bar\"",
-                "        }",
-                "        pane name=%s command=%s cwd=%s {" % (
-                    kdl(core.display_name(agent)), python, kdl(str(root))
+                "            pane name=%s command=%s cwd=%s%s {" % (
+                    kdl(core.display_name(agent)), python, kdl(str(root)), focus
                 ),
-                "            args %s %s" % (agent_session, kdl(agent)),
-                "        }",
-                "    }",
+                "                args %s %s" % (agent_session, kdl(agent)),
+                "            }",
             ]
         )
     lines.extend(
         [
+            "        }",
+            "    }",
             "    tab name=\"Relay\" {",
             "        pane size=1 borderless=true {",
             "            plugin location=\"tab-bar\"",

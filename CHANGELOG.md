@@ -2,6 +2,13 @@
 
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/), 버전은 [Semantic Versioning](https://semver.org/lang/ko/)을 따릅니다.
 
+## [0.15.1] - 2026-08-10
+
+### 변경
+
+- 활성화한 Claude, Codex, Gemini를 하나의 `Agents` 탭에서 같은 너비의 분할 패널로 표시
+- Relay는 AI 간 공개 메시지를 확인하는 별도 탭으로 유지
+
 ## [0.15.0] - 2026-08-10
 
 Rondo를 Codex CLI, Claude Code, Gemini CLI의 가벼운 보조 도구로 다시 설계한 호환성 중단 릴리스입니다.
@@ -32,4 +39,5 @@ Rondo를 Codex CLI, Claude Code, Gemini CLI의 가벼운 보조 도구로 다시
 
 이전 릴리스 기록은 [GitHub Releases](https://github.com/ppupy1209/rondo/releases)에서 확인할 수 있습니다.
 
+[0.15.1]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.1
 [0.15.0]: https://github.com/ppupy1209/rondo/releases/tag/v0.15.0

@@ -23,13 +23,13 @@ Rondo는 Codex CLI, Claude Code, Gemini CLI를 대체하지 않습니다. 세 �
 Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.0/install.ps1))) -Version v0.15.0
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.1/install.ps1))) -Version v0.15.1
 ```
 
 macOS / Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.0/install.sh | RONDO_VERSION=v0.15.0 sh
+curl -fsSL https://raw.githubusercontent.com/ppupy1209/rondo/v0.15.1/install.sh | RONDO_VERSION=v0.15.1 sh
 ```
 
 설치기는 Python 3.10 이상을 확인하고 Zellij 0.44.3을 검증된 SHA-256으로 설치합니다. AI 공급자 CLI는 설치하거나 업데이트하지 않습니다.
@@ -44,7 +44,7 @@ rondo
 
 첫 실행에서 설치된 AI 중 사용할 항목을 한 번 선택합니다. 이후에는 `rondo`만 입력하면 같은 프로젝트의 Rondo 화면으로 바로 들어갑니다.
 
-AI마다 별도 탭이 생기므로 상단의 `Claude`, `Codex`, `Gemini`, `Relay` 탭 이름을 마우스로 누를 수 있습니다. 키보드는 `Ctrl+t`를 누른 다음 왼쪽·오른쪽 방향키로 탭을 이동합니다. Rondo는 기본 모드를 `normal`, 마우스를 `on`으로 시작합니다.
+활성화한 Claude, Codex, Gemini는 `Agents` 탭 한 화면에 같은 너비의 패널로 분할됩니다. 마우스로 패널을 누르거나 `Ctrl+p`를 누른 뒤 방향키로 AI를 이동할 수 있습니다. Relay는 별도 탭이며 `Ctrl+t`를 누른 뒤 방향키로 전환합니다. Rondo는 기본 모드를 `normal`, 마우스를 `on`으로 시작합니다.
 
 ## 권장 흐름
 
@@ -74,7 +74,7 @@ rondo review pass "단위·통합 테스트 통과, 차단 이슈 없음"
 ## 명령
 
 ```text
-rondo                         AI 탭과 Relay 열기
+rondo                         AI 분할 패널과 Relay 열기
 rondo setup                   사용할 AI 변경
 rondo context on|off          맥락 공유 켜기/끄기
 rondo task "목표"             작업 목표 기록

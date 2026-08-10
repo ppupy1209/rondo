@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open real Rondo tabs and verify visible delivery through Zellij on Unix."""
+"""Open split Rondo panes and verify visible delivery through Zellij on Unix."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def main():
         repo = base / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        fake = base / "fake-codex"
+        fake = base / "fake-agent"
         fake.write_text("#!/bin/sh\nexec python3 %s \"$@\"\n" % json.dumps(str(FAKE)), encoding="utf-8")
         fake.chmod(0o755)
         socket = base / "socket"
@@ -73,12 +73,14 @@ def main():
                 "PATH": str(ROOT / "bin") + os.pathsep + env["PATH"],
                 "ZELLIJ_SOCKET_DIR": str(socket),
                 "ZELLIJ_CONFIG_DIR": str(config),
+                "RONDO_CLAUDE_COMMAND": str(fake),
                 "RONDO_CODEX_COMMAND": str(fake),
+                "RONDO_GEMINI_COMMAND": str(fake),
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
         )
         configured = subprocess.run(
-            [sys.executable, str(RONDO), "setup", "--agents", "codex"],
+            [sys.executable, str(RONDO), "setup", "--agents", "claude,codex,gemini"],
             cwd=repo, env=env, capture_output=True, text=True, timeout=15,
         )
         if configured.returncode:
@@ -95,7 +97,15 @@ def main():
         )
         os.close(slave)
         try:
-            wait_screen(env, name, "Codex", "FAKE_AGENT_READY")
+            for title in ("Claude", "Codex", "Gemini"):
+                wait_screen(env, name, title, "FAKE_AGENT_READY")
+            agent_tabs = {
+                item.get("title"): item.get("tab_name")
+                for item in panes(env, name)
+                if item.get("title") in ("Claude", "Codex", "Gemini")
+            }
+            if agent_tabs != {"Claude": "Agents", "Codex": "Agents", "Gemini": "Agents"}:
+                raise RuntimeError("agents were not split in one tab: %r" % agent_tabs)
             token = "VISIBLE_" + uuid.uuid4().hex[:8]
             sent = subprocess.run(
                 [sys.executable, str(RONDO), "message", "codex", token],
@@ -115,7 +125,7 @@ def main():
                 process.terminate()
                 process.wait(timeout=3)
             os.close(master)
-    print("real Rondo tabs and visible delivery: OK")
+    print("real split Rondo panes and visible delivery: OK")
     return 0
 
 
